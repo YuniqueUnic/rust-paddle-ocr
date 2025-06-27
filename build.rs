@@ -55,6 +55,14 @@ fn main() {
             panic!("cbindgen failed to generate bindings: {:?}", e);
         }
     }
+
+    // 针对Windows平台的特殊处理
+    if cfg!(target_os = "windows") {
+        println!("cargo:rustc-link-lib=msvcrt");
+        println!("cargo:rustc-link-lib=libucrt");
+        println!("cargo:rustc-link-lib=libvcruntime");
+        println!("cargo:rustc-link-lib=oldnames");
+    }
 }
 
 fn target_dir() -> PathBuf {
