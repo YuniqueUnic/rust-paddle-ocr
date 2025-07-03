@@ -22,67 +22,103 @@ jobs:
           - os: ubuntu-latest
             artifact_name: ocr
             asset_name: ocr-v4-linux-amd64
+            lib_name: librust_paddle_ocr.so
+            lib_asset_name: librust_paddle_ocr-linux-amd64.so
             target: x86_64-unknown-linux-gnu
             features: ""
+            build_lib: false
           - os: ubuntu-latest
             artifact_name: ocr
             asset_name: ocr-v5-linux-amd64
+            lib_name: librust_paddle_ocr.so
+            lib_asset_name: librust_paddle_ocr-linux-amd64.so
             target: x86_64-unknown-linux-gnu
             features: "--features v5"
+            build_lib: true
           - os: windows-2022
             artifact_name: ocr.exe
             asset_name: ocr-v4-windows-amd64.exe
+            lib_name: rust_paddle_ocr.dll
+            lib_asset_name: rust_paddle_ocr-windows-amd64.dll
             target: x86_64-pc-windows-msvc
             features: ""
+            build_lib: false
           - os: windows-2022
             artifact_name: ocr.exe
             asset_name: ocr-v5-windows-amd64.exe
+            lib_name: rust_paddle_ocr.dll
+            lib_asset_name: rust_paddle_ocr-windows-amd64.dll
             target: x86_64-pc-windows-msvc
             features: "--features v5"
+            build_lib: true
           - os: macos-latest
             artifact_name: ocr
             asset_name: ocr-v4-macos-amd64
+            lib_name: librust_paddle_ocr.dylib
+            lib_asset_name: librust_paddle_ocr-macos-amd64.dylib
             target: x86_64-apple-darwin
             features: ""
+            build_lib: false
           - os: macos-latest
             artifact_name: ocr
             asset_name: ocr-v5-macos-amd64
+            lib_name: librust_paddle_ocr.dylib
+            lib_asset_name: librust_paddle_ocr-macos-amd64.dylib
             target: x86_64-apple-darwin
             features: "--features v5"
+            build_lib: true
           
           # arm64架构 - 两个版本
           - os: ubuntu-latest
             artifact_name: ocr
             asset_name: ocr-v4-linux-arm64
+            lib_name: librust_paddle_ocr.so
+            lib_asset_name: librust_paddle_ocr-linux-arm64.so
             target: aarch64-unknown-linux-gnu
             features: ""
+            build_lib: false
           - os: ubuntu-latest
             artifact_name: ocr
             asset_name: ocr-v5-linux-arm64
+            lib_name: librust_paddle_ocr.so
+            lib_asset_name: librust_paddle_ocr-linux-arm64.so
             target: aarch64-unknown-linux-gnu
             features: "--features v5"
+            build_lib: true
           - os: macos-latest
             artifact_name: ocr
             asset_name: ocr-v4-macos-arm64
+            lib_name: librust_paddle_ocr.dylib
+            lib_asset_name: librust_paddle_ocr-macos-arm64.dylib
             target: aarch64-apple-darwin
             features: ""
+            build_lib: false
           - os: macos-latest
             artifact_name: ocr
             asset_name: ocr-v5-macos-arm64
+            lib_name: librust_paddle_ocr.dylib
+            lib_asset_name: librust_paddle_ocr-macos-arm64.dylib
             target: aarch64-apple-darwin
             features: "--features v5"
+            build_lib: true
           
           # 32位架构 - 两个版本
           - os: windows-2022
             artifact_name: ocr.exe
             asset_name: ocr-v4-windows-x86.exe
+            lib_name: rust_paddle_ocr.dll
+            lib_asset_name: rust_paddle_ocr-windows-x86.dll
             target: i686-pc-windows-msvc
             features: ""
+            build_lib: false
           - os: windows-2022
             artifact_name: ocr.exe
             asset_name: ocr-v5-windows-x86.exe
+            lib_name: rust_paddle_ocr.dll
+            lib_asset_name: rust_paddle_ocr-windows-x86.dll
             target: i686-pc-windows-msvc
             features: "--features v5"
+            build_lib: true
     
     steps:
       - uses: actions/checkout@v4
@@ -144,22 +180,32 @@ jobs:
           command: build
           args: --release --bin ocr --target ${{ matrix.target }} ${{ matrix.features }}
 
-      - name: Rename Binary
+      - name: Build Release Dynamic Library
+        if: matrix.build_lib
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --lib --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Rename Binary and Library
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "windows-2022" ]; then
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          else
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          # 重命名二进制文件
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          
+          # 重命名动态库文件（仅v5版本）
+          if [ "${{ matrix.build_lib }}" = "true" ]; then
+            cp target/${{ matrix.target }}/release/${{ matrix.lib_name }} ${{ matrix.lib_asset_name }}
           fi
       
-      - name: Upload Release Asset
+      - name: Upload Release Assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ matrix.asset_name }}
+          files: |
+            ${{ matrix.asset_name }}
+            ${{ matrix.build_lib && matrix.lib_asset_name || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          files: ${{ matrix.asset_name }}
 
