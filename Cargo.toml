@@ -57,7 +57,7 @@ libc = "0.2"
 cbindgen = "0.24"
 
 [dependencies.mnn]
-git = "https://github.com/zibo-chen/mnn-rs.git"
+git = "https://github.com/aftershootco/mnn-rs.git"
 features = []
 
 [dev-dependencies]
