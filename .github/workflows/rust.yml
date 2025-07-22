@@ -137,12 +137,6 @@ jobs:
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $GITHUB_ENV
         shell: bash
       
-      - name: Install LLVM for Windows
-        if: matrix.os == 'windows-2022'
-        run: |
-          choco install llvm --version=19.1.0 -y
-          echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
-        shell: powershell
       
       - name: Install Cross-Compilation Dependencies
         if: contains(matrix.target, 'aarch64-unknown-linux-gnu')
