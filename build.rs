@@ -148,6 +148,24 @@ fn build_mnn_with_cmake(
         config.define("CMAKE_BUILD_TYPE", "Release");
     }
 
+    // For Windows MSVC, set static runtime linking when using +crt-static
+    if os == "windows" {
+        // Check if we're using static CRT
+        if env::var("CARGO_CFG_TARGET_FEATURE").map_or(false, |f| f.contains("crt-static")) {
+            // Use static MSVC runtime for both Debug and Release
+            // This matches Rust's +crt-static behavior
+            if debug == "true" {
+                config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreadedDebug");
+            } else {
+                config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
+            }
+        }
+        // For 32-bit Windows, ensure proper configuration
+        if arch == "x86" {
+            config.define("CMAKE_GENERATOR_PLATFORM", "Win32");
+        }
+    }
+
     // Android cross-compilation
     if os == "android" {
         let ndk = env::var("ANDROID_NDK_ROOT")
@@ -300,7 +318,7 @@ fn link_libraries(
             println!("cargo:rustc-link-lib=log");
         }
         "windows" => {
-            // MSVC runtime is linked automatically
+            // MSVC runtime is linked automatically when using matching CRT settings
         }
         _ => {}
     }

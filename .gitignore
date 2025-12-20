@@ -7,3 +7,4 @@ Cargo.lock
 *.exe
 ocr-*-amd64*
 medivh-mnn/
+3rd_party/
