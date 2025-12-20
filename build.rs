@@ -147,8 +147,11 @@ fn build_mnn_with_cmake(
         config.define("CMAKE_BUILD_TYPE", "Release");
         // Check if we're using static CRT
         if env::var("CARGO_CFG_TARGET_FEATURE").map_or(false, |f| f.contains("crt-static")) {
-            // Always use MultiThreaded (static release CRT) for Windows
+            // Force static CRT linking using compiler flags
+            // /MT is the flag for MultiThreaded static release CRT
             config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
+            config.cflag("/MT");
+            config.cxxflag("/MT");
         }
         // For 32-bit Windows, ensure proper configuration
         if arch == "x86" {
