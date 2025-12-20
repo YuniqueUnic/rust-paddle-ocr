@@ -3,8 +3,6 @@ name: Rust
 on:
   push:
     branches: [ "main" ]
-    tags:
-      - 'v*'
   pull_request:
     branches: [ "main" ]
 
@@ -18,71 +16,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # amd64架构 - 两个版本
+          # Linux x86_64
           - os: ubuntu-latest
-            artifact_name: ocr
-            asset_name: ocr-v4-linux-amd64
             target: x86_64-unknown-linux-gnu
-            features: ""
-          - os: ubuntu-latest
-            artifact_name: ocr
-            asset_name: ocr-v5-linux-amd64
-            target: x86_64-unknown-linux-gnu
-            features: "--features v5"
+          # Windows x86_64
           - os: windows-2022
-            artifact_name: ocr.exe
-            asset_name: ocr-v4-windows-amd64.exe
             target: x86_64-pc-windows-msvc
-            features: ""
-          - os: windows-2022
-            artifact_name: ocr.exe
-            asset_name: ocr-v5-windows-amd64.exe
-            target: x86_64-pc-windows-msvc
-            features: "--features v5"
+          # macOS x86_64
           - os: macos-latest
-            artifact_name: ocr
-            asset_name: ocr-v4-macos-amd64
             target: x86_64-apple-darwin
-            features: ""
-          - os: macos-latest
-            artifact_name: ocr
-            asset_name: ocr-v5-macos-amd64
-            target: x86_64-apple-darwin
-            features: "--features v5"
-          
-          # arm64架构 - 两个版本
+          # Linux ARM64
           - os: ubuntu-latest
-            artifact_name: ocr
-            asset_name: ocr-v4-linux-arm64
             target: aarch64-unknown-linux-gnu
-            features: ""
-          - os: ubuntu-latest
-            artifact_name: ocr
-            asset_name: ocr-v5-linux-arm64
-            target: aarch64-unknown-linux-gnu
-            features: "--features v5"
+          # macOS ARM64
           - os: macos-latest
-            artifact_name: ocr
-            asset_name: ocr-v4-macos-arm64
             target: aarch64-apple-darwin
-            features: ""
-          - os: macos-latest
-            artifact_name: ocr
-            asset_name: ocr-v5-macos-arm64
-            target: aarch64-apple-darwin
-            features: "--features v5"
-          
-          # 32位架构 - 两个版本
+          # Windows x86
           - os: windows-2022
-            artifact_name: ocr.exe
-            asset_name: ocr-v4-windows-x86.exe
             target: i686-pc-windows-msvc
-            features: ""
-          - os: windows-2022
-            artifact_name: ocr.exe
-            asset_name: ocr-v5-windows-x86.exe
-            target: i686-pc-windows-msvc
-            features: "--features v5"
     
     steps:
       - uses: actions/checkout@v4
@@ -118,41 +69,15 @@ jobs:
         shell: bash
       
       - name: Build
-        if: matrix.os != 'windows-2022'
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --verbose --target ${{ matrix.target }} ${{ matrix.features }}
+          args: --verbose --target ${{ matrix.target }}
       
       - name: Run tests
-        if: contains(matrix.target, 'x86_64') && matrix.os != 'windows-2022'
+        if: contains(matrix.target, 'x86_64')
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --verbose --target ${{ matrix.target }} ${{ matrix.features }}
-      
-      - name: Build Release Binary
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --bin ocr --target ${{ matrix.target }} ${{ matrix.features }}
-
-      - name: Rename Binary
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          if [ "${{ matrix.os }}" = "windows-2022" ]; then
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          else
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          fi
-      
-      - name: Upload Release Asset
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: ${{ matrix.asset_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          files: ${{ matrix.asset_name }}
+          args: --verbose --target ${{ matrix.target }}
 

@@ -1,410 +1,604 @@
-#[cfg(feature = "fast_image_resize")]
-use fast_image_resize::Resizer;
-use image::{DynamicImage, GenericImageView};
-use mnn::{BackendConfig, ForwardType, Interpreter, PowerMode, PrecisionMode, ScheduleConfig};
-use ndarray::{Array, ArrayBase, Dim, OwnedRepr};
-use std::{borrow::Cow, path::Path};
+//! 文本识别模型
+//!
+//! Text Recognition Model
+//!
+//! 提供基于 PaddleOCR 识别模型的文本识别功能
 
-use crate::error::OcrResult;
+use image::DynamicImage;
+use ndarray::ArrayD;
+use std::path::Path;
 
-/// 文本识别模型
-///
-/// Text recognition model that identifies characters in text images
-pub struct Rec {
-    interpreter: Interpreter,
-    session: Option<mnn::Session>,
-    keys: Vec<char>,
-    min_score: f32,
-    punct_min_score: f32,
-    #[cfg(feature = "fast_resize")]
-    resizer: fast_image_resize::Resizer,
+use crate::error::{OcrError, OcrResult};
+use crate::mnn::{InferenceConfig, InferenceEngine};
+use crate::preprocess::{preprocess_for_rec, NormalizeParams};
+
+/// 识别结果
+#[derive(Debug, Clone)]
+pub struct RecognitionResult {
+    /// 识别出的文本
+    pub text: String,
+    /// 置信度 (0.0 - 1.0)
+    pub confidence: f32,
+    /// 每个字符的置信度
+    pub char_scores: Vec<(char, f32)>,
 }
 
-impl Rec {
-    const MIN_SCORE_DEFAULT: f32 = 0.6;
-    const PUNCT_MIN_SCORE_DEFAULT: f32 = 0.1;
-
-    const PUNCTUATIONS: [char; 49] = [
-        ',', '.', '!', '?', ';', ':', '"', '\'', '(', ')', '[', ']', '{', '}', '-', '_', '/', '\\',
-        '|', '@', '#', '$', '%', '&', '*', '+', '=', '~', '，', '。', '！', '？', '；', '：', '、',
-        '「', '」', '『', '』', '（', '）', '【', '】', '《', '》', '—', '…', '·', '～',
-    ];
-
-    /// 创建新的文本识别器实例
-    ///
-    /// Create a new text recognizer instance
-    pub fn new(interpreter: Interpreter, keys: Vec<char>) -> Self {
+impl RecognitionResult {
+    /// 创建新的识别结果
+    pub fn new(text: String, confidence: f32, char_scores: Vec<(char, f32)>) -> Self {
         Self {
-            interpreter,
-            session: None,
-            keys,
-            min_score: Self::MIN_SCORE_DEFAULT,
-            punct_min_score: Self::PUNCT_MIN_SCORE_DEFAULT,
-            #[cfg(feature = "fast_resize")]
-            resizer: fast_image_resize::Resizer::new(),
+            text,
+            confidence,
+            char_scores,
         }
     }
 
-    /// 从模型文件和字符集文件创建文本识别器
-    ///
-    /// Create a text recognizer from model file and character set file
-    pub fn from_file(model_path: impl AsRef<Path>, keys_path: impl AsRef<Path>) -> OcrResult<Self> {
-        let interpreter = Interpreter::from_file(model_path)?;
-        let keys_content = std::fs::read_to_string(keys_path)?;
+    /// 判断结果是否有效 (置信度高于阈值)
+    pub fn is_valid(&self, threshold: f32) -> bool {
+        self.confidence >= threshold
+    }
+}
 
-        let keys = " "
-            .chars()
-            .chain(keys_content.chars().filter(|x| *x != '\n' && *x != '\r'))
-            .chain(" ".chars())
-            .collect();
+/// 识别选项
+#[derive(Debug, Clone)]
+pub struct RecOptions {
+    /// 目标高度 (识别模型输入高度)
+    pub target_height: u32,
+    /// 最小置信度阈值 (低于此值的字符会被过滤)
+    pub min_score: f32,
+    /// 标点符号的最小置信度阈值
+    pub punct_min_score: f32,
+    /// 批处理大小
+    pub batch_size: usize,
+    /// 是否启用批处理
+    pub enable_batch: bool,
+}
+
+impl Default for RecOptions {
+    fn default() -> Self {
+        Self {
+            target_height: 48,
+            min_score: 0.3, // 降低阈值，模型输出是原始 logit
+            punct_min_score: 0.1,
+            batch_size: 8,
+            enable_batch: true,
+        }
+    }
+}
+
+impl RecOptions {
+    /// 创建新的识别选项
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 设置目标高度
+    pub fn with_target_height(mut self, height: u32) -> Self {
+        self.target_height = height;
+        self
+    }
+
+    /// 设置最小置信度
+    pub fn with_min_score(mut self, score: f32) -> Self {
+        self.min_score = score;
+        self
+    }
+
+    /// 设置标点符号最小置信度
+    pub fn with_punct_min_score(mut self, score: f32) -> Self {
+        self.punct_min_score = score;
+        self
+    }
+
+    /// 设置批处理大小
+    pub fn with_batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size;
+        self
+    }
+
+    /// 启用/禁用批处理
+    pub fn with_batch(mut self, enable: bool) -> Self {
+        self.enable_batch = enable;
+        self
+    }
+}
+
+/// 文本识别模型
+pub struct RecModel {
+    engine: InferenceEngine,
+    /// 字符集 (索引到字符的映射)
+    charset: Vec<char>,
+    options: RecOptions,
+    normalize_params: NormalizeParams,
+}
+
+/// 常用标点符号
+const PUNCTUATIONS: [char; 49] = [
+    ',', '.', '!', '?', ';', ':', '"', '\'', '(', ')', '[', ']', '{', '}', '-', '_', '/', '\\',
+    '|', '@', '#', '$', '%', '&', '*', '+', '=', '~', '，', '。', '！', '？', '；', '：', '、',
+    '「', '」', '『', '』', '（', '）', '【', '】', '《', '》', '—', '…', '·', '～',
+];
+
+impl RecModel {
+    /// 从模型文件和字符集文件创建识别器
+    ///
+    /// # 参数
+    /// - `model_path`: 模型文件路径 (.mnn 格式)
+    /// - `charset_path`: 字符集文件路径 (每行一个字符)
+    /// - `config`: 可选的推理配置
+    pub fn from_file(
+        model_path: impl AsRef<Path>,
+        charset_path: impl AsRef<Path>,
+        config: Option<InferenceConfig>,
+    ) -> OcrResult<Self> {
+        let engine = InferenceEngine::from_file(model_path, config)?;
+        let charset = Self::load_charset_from_file(charset_path)?;
 
         Ok(Self {
-            interpreter,
-            session: None,
-            keys,
-            min_score: Self::MIN_SCORE_DEFAULT,
-            punct_min_score: Self::PUNCT_MIN_SCORE_DEFAULT,
-            #[cfg(feature = "fast_resize")]
-            resizer: fast_image_resize::Resizer::new(),
+            engine,
+            charset,
+            options: RecOptions::default(),
+            normalize_params: NormalizeParams::paddle_rec(),
         })
     }
 
-    /// 从模型字节创建文本识别器，需要提供字符集文件路径
-    ///
-    /// Create a text recognizer from model bytes and character set file
+    /// 从模型字节和字符集文件创建识别器
     pub fn from_bytes(
-        model_bytes: impl AsRef<[u8]>,
-        keys_path: impl AsRef<Path>,
+        model_bytes: &[u8],
+        charset_path: impl AsRef<Path>,
+        config: Option<InferenceConfig>,
     ) -> OcrResult<Self> {
-        let interpreter = Interpreter::from_bytes(model_bytes)?;
-        let keys_content = std::fs::read_to_string(keys_path)?;
-
-        let keys = " "
-            .chars()
-            .chain(keys_content.chars().filter(|x| *x != '\n' && *x != '\r'))
-            .chain(" ".chars())
-            .collect();
+        let engine = InferenceEngine::from_buffer(model_bytes, config)?;
+        let charset = Self::load_charset_from_file(charset_path)?;
 
         Ok(Self {
-            interpreter,
-            session: None,
-            keys,
-            min_score: Self::MIN_SCORE_DEFAULT,
-            punct_min_score: Self::PUNCT_MIN_SCORE_DEFAULT,
-            #[cfg(feature = "fast_resize")]
-            resizer: fast_image_resize::Resizer::new(),
+            engine,
+            charset,
+            options: RecOptions::default(),
+            normalize_params: NormalizeParams::paddle_rec(),
         })
     }
 
-    /// 从模型字节和字符集字节创建文本识别器
-    ///
-    /// Create a text recognizer from model bytes and character set bytes
-    pub fn from_bytes_with_keys(
-        model_bytes: impl AsRef<[u8]>,
-        keys_bytes: impl AsRef<[u8]>,
+    /// 从模型字节和字符集字节创建识别器
+    pub fn from_bytes_with_charset(
+        model_bytes: &[u8],
+        charset_bytes: &[u8],
+        config: Option<InferenceConfig>,
     ) -> OcrResult<Self> {
-        let interpreter = Interpreter::from_bytes(model_bytes)?;
-        let keys_content = std::str::from_utf8(keys_bytes.as_ref()).map_err(|e| {
-            crate::error::OcrError::IOError(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        })?;
-
-        let keys = " "
-            .chars()
-            .chain(keys_content.chars().filter(|x| *x != '\n' && *x != '\r'))
-            .chain(" ".chars())
-            .collect();
+        let engine = InferenceEngine::from_buffer(model_bytes, config)?;
+        let charset = Self::parse_charset(charset_bytes)?;
 
         Ok(Self {
-            interpreter,
-            session: None,
-            keys,
-            min_score: Self::MIN_SCORE_DEFAULT,
-            punct_min_score: Self::PUNCT_MIN_SCORE_DEFAULT,
-            #[cfg(feature = "fast_resize")]
-            resizer: fast_image_resize::Resizer::new(),
+            engine,
+            charset,
+            options: RecOptions::default(),
+            normalize_params: NormalizeParams::paddle_rec(),
         })
     }
 
-    /// 设置常规字符的最小识别置信度阈值
-    ///
-    /// Set the minimum confidence threshold for regular characters
-    pub fn with_min_score(mut self, min_score: f32) -> Self {
-        self.min_score = min_score;
+    /// 从字符集文件加载字符集
+    fn load_charset_from_file(path: impl AsRef<Path>) -> OcrResult<Vec<char>> {
+        let content = std::fs::read_to_string(path)?;
+        Self::parse_charset(content.as_bytes())
+    }
+
+    /// 解析字符集数据
+    fn parse_charset(data: &[u8]) -> OcrResult<Vec<char>> {
+        let content = std::str::from_utf8(data)
+            .map_err(|e| OcrError::CharsetError(format!("UTF-8 解码错误: {}", e)))?;
+
+        // 字符集格式: 每行一个字符
+        // 首尾添加空格作为 blank 和 padding
+        let mut charset: Vec<char> = vec![' ']; // 开头的 blank token
+
+        for ch in content.chars() {
+            if ch != '\n' && ch != '\r' {
+                charset.push(ch);
+            }
+        }
+
+        charset.push(' '); // 结尾的 padding token
+
+        if charset.len() < 3 {
+            return Err(OcrError::CharsetError("字符集太小".to_string()));
+        }
+
+        Ok(charset)
+    }
+
+    /// 设置识别选项
+    pub fn with_options(mut self, options: RecOptions) -> Self {
+        self.options = options;
         self
     }
 
-    /// 设置标点符号的最小识别置信度阈值
-    ///
-    /// Set the minimum confidence threshold for punctuation characters
-    pub fn with_punct_min_score(mut self, punct_min_score: f32) -> Self {
-        self.punct_min_score = punct_min_score;
-        self
+    /// 获取当前识别选项
+    pub fn options(&self) -> &RecOptions {
+        &self.options
     }
 
-    #[inline]
-    fn is_punctuation(&self, ch: char) -> bool {
-        Self::PUNCTUATIONS.contains(&ch)
+    /// 修改识别选项
+    pub fn options_mut(&mut self) -> &mut RecOptions {
+        &mut self.options
     }
 
-    /// 识别图像中的文本，返回字符及其置信度
-    ///
-    /// Recognize text in the image, returning characters and their confidence scores
-    pub fn predict_char_score(&mut self, img: &DynamicImage) -> OcrResult<Vec<(char, f32)>> {
-        #[cfg(not(feature = "fast_resize"))]
-        let input = Self::preprocess(img)?;
-        #[cfg(feature = "fast_resize")]
-        let input = Self::preprocess(img, &mut self.resizer)?;
-        let output = self.run_model(&input)?;
-        Ok(output)
+    /// 获取字符集大小
+    pub fn charset_size(&self) -> usize {
+        self.charset.len()
     }
 
-    /// 识别图像中的文本，返回字符串
+    /// 识别单张图像
     ///
-    /// Recognize text in the image, returning a string
-    pub fn predict_str(&mut self, img: &DynamicImage) -> OcrResult<String> {
-        let ret = self.predict_char_score(img)?;
-        Ok(ret.into_iter().map(|x| x.0).collect())
+    /// # 参数
+    /// - `image`: 输入图像 (文本行图像)
+    ///
+    /// # 返回
+    /// 识别结果
+    pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
+        // 预处理
+        let input = preprocess_for_rec(image, self.options.target_height, &self.normalize_params);
+
+        // 推理 (使用动态形状)
+        let output = self.engine.run_dynamic(input.view().into_dyn())?;
+
+        // 解码
+        self.decode_output(&output)
     }
 
-    /// 识别图像中的文本，返回字符串和置信度
-    ///
-    /// Recognize text in the image, returning a string and confidence score
-    pub fn predict_with_confidence(&mut self, img: &DynamicImage) -> OcrResult<(String, f32)> {
-        let char_scores = self.predict_char_score(img)?;
+    /// 识别单张图像，只返回文本
+    pub fn recognize_text(&self, image: &DynamicImage) -> OcrResult<String> {
+        let result = self.recognize(image)?;
+        Ok(result.text)
+    }
 
-        if char_scores.is_empty() {
-            return Ok((String::new(), 0.0));
+    /// 批量识别图像
+    ///
+    /// # 参数
+    /// - `images`: 输入图像列表
+    ///
+    /// # 返回
+    /// 识别结果列表
+    pub fn recognize_batch(&self, images: &[DynamicImage]) -> OcrResult<Vec<RecognitionResult>> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 对于少量图像，直接逐个处理
+        if images.len() <= 2 || !self.options.enable_batch {
+            return images.iter().map(|img| self.recognize(img)).collect();
+        }
+
+        // 批量处理
+        let mut results = Vec::with_capacity(images.len());
+
+        for chunk in images.chunks(self.options.batch_size) {
+            let batch_results = self.recognize_batch_internal(chunk)?;
+            results.extend(batch_results);
+        }
+
+        Ok(results)
+    }
+
+    /// 批量识别图像（借用版本，避免克隆）
+    ///
+    /// # 参数
+    /// - `images`: 输入图像引用列表
+    ///
+    /// # 返回
+    /// 识别结果列表
+    pub fn recognize_batch_ref(
+        &self,
+        images: &[&DynamicImage],
+    ) -> OcrResult<Vec<RecognitionResult>> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 对于少量图像，直接逐个处理
+        if images.len() <= 2 || !self.options.enable_batch {
+            return images.iter().map(|img| self.recognize(img)).collect();
+        }
+
+        // 批量处理
+        let mut results = Vec::with_capacity(images.len());
+
+        for chunk in images.chunks(self.options.batch_size) {
+            // 解引用转换为 Vec<DynamicImage>
+            let chunk_owned: Vec<DynamicImage> = chunk.iter().map(|img| (*img).clone()).collect();
+            let batch_results = self.recognize_batch_internal(&chunk_owned)?;
+            results.extend(batch_results);
+        }
+
+        Ok(results)
+    }
+
+    /// 内部批量识别
+    fn recognize_batch_internal(
+        &self,
+        images: &[DynamicImage],
+    ) -> OcrResult<Vec<RecognitionResult>> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 如果只有一张图像，直接单独处理
+        if images.len() == 1 {
+            return Ok(vec![self.recognize(&images[0])?]);
+        }
+
+        // 批量预处理
+        let batch_input = crate::preprocess::preprocess_batch_for_rec(
+            images,
+            self.options.target_height,
+            &self.normalize_params,
+        );
+
+        // 批量推理
+        let batch_output = self.engine.run_dynamic(batch_input.view().into_dyn())?;
+
+        // 解码每个样本的输出
+        let shape = batch_output.shape();
+        if shape.len() != 3 {
+            return Err(OcrError::PostprocessError(format!(
+                "批量推理输出形状错误: {:?}",
+                shape
+            )));
+        }
+
+        let batch_size = shape[0];
+        let mut results = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            // 提取单个样本的输出
+            let sample_output = batch_output.slice(ndarray::s![i, .., ..]).to_owned();
+            let sample_output_dyn = sample_output.into_dyn();
+            let result = self.decode_output(&sample_output_dyn)?;
+            results.push(result);
+        }
+
+        Ok(results)
+    }
+
+    /// 解码模型输出
+    fn decode_output(&self, output: &ArrayD<f32>) -> OcrResult<RecognitionResult> {
+        let shape = output.shape();
+
+        // 输出形状应该是 [batch, seq_len, num_classes] 或 [seq_len, num_classes]
+        let (seq_len, num_classes) = if shape.len() == 3 {
+            (shape[1], shape[2])
+        } else if shape.len() == 2 {
+            (shape[0], shape[1])
+        } else {
+            return Err(OcrError::PostprocessError(format!(
+                "无效的输出形状: {:?}",
+                shape
+            )));
+        };
+
+        let output_data: Vec<f32> = output.iter().cloned().collect();
+
+        // CTC 解码
+        let mut char_scores = Vec::new();
+        let mut prev_idx = 0usize;
+
+        for t in 0..seq_len {
+            // 找到当前时间步的最大概率字符
+            let start = t * num_classes;
+            let end = start + num_classes;
+            let probs = &output_data[start..end];
+
+            let (max_idx, &max_prob) = probs
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .unwrap();
+
+            // CTC 解码规则: 跳过 blank (索引 0) 和重复字符
+            if max_idx != 0 && max_idx != prev_idx {
+                if max_idx < self.charset.len() {
+                    let ch = self.charset[max_idx];
+
+                    // 使用原始 logit 值作为置信度（模型输出已经是 softmax 后的概率）
+                    // 对于大字符集，softmax 分数会非常小，所以直接使用 max_prob
+                    let score = max_prob;
+
+                    // 只过滤掉非常低置信度的字符
+                    let threshold = if Self::is_punctuation(ch) {
+                        self.options.punct_min_score
+                    } else {
+                        self.options.min_score
+                    };
+
+                    if score >= threshold {
+                        char_scores.push((ch, score));
+                    }
+                }
+            }
+
+            prev_idx = max_idx;
         }
 
         // 计算平均置信度
-        let total_score: f32 = char_scores.iter().map(|(_, score)| *score).sum();
-        let avg_score = total_score / char_scores.len() as f32;
+        let confidence = if char_scores.is_empty() {
+            0.0
+        } else {
+            char_scores.iter().map(|(_, s)| s).sum::<f32>() / char_scores.len() as f32
+        };
 
         // 提取文本
-        let text: String = char_scores.into_iter().map(|(ch, _)| ch).collect();
+        let text: String = char_scores.iter().map(|(ch, _)| ch).collect();
 
-        Ok((text, avg_score))
+        Ok(RecognitionResult::new(text, confidence, char_scores))
     }
 
-    #[cfg(feature = "fast_resize")]
-    fn preprocess(
-        img: &DynamicImage,
-        resizer: &mut Resizer,
-    ) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
-        use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions};
-        let (w, h) = img.dimensions();
-        let img = if h <= 48 {
-            Cow::Borrowed(img)
-        } else {
-            let resize_option =
-                ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::CatmullRom));
-            let mut dst_img = DynamicImage::new(w * 48 / h, 48, img.color());
-            resizer.resize(img, &mut dst_img, &resize_option)?;
-            Cow::Owned(dst_img)
-        };
-
-        let (w, h) = img.dimensions();
-        let mut input = Array::zeros((1, 3, h as usize, w as usize));
-
-        const MEAN: f32 = 0.5;
-        const STD: f32 = 0.5;
-
-        for pixel in img.pixels() {
-            let x = pixel.0 as usize;
-            let y = pixel.1 as usize;
-            let [r, g, b, _] = pixel.2 .0;
-
-            input[[0, 0, y, x]] = (r as f32 / 255.0 - MEAN) / STD;
-            input[[0, 1, y, x]] = (g as f32 / 255.0 - MEAN) / STD;
-            input[[0, 2, y, x]] = (b as f32 / 255.0 - MEAN) / STD;
-        }
-
-        Ok(input)
-    }
-
-    #[cfg(not(feature = "fast_resize"))]
-    fn preprocess(img: &DynamicImage) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
-        let (w, h) = img.dimensions();
-        let img = if h <= 48 {
-            Cow::Borrowed(img)
-        } else {
-            Cow::Owned(img.resize_exact(w * 48 / h, 48, image::imageops::FilterType::CatmullRom))
-        };
-
-        let (w, h) = img.dimensions();
-        let mut input = Array::zeros((1, 3, h as usize, w as usize));
-
-        const MEAN: f32 = 0.5;
-        const STD: f32 = 0.5;
-
-        for pixel in img.pixels() {
-            let x = pixel.0 as usize;
-            let y = pixel.1 as usize;
-            let [r, g, b, _] = pixel.2 .0;
-
-            input[[0, 0, y, x]] = (r as f32 / 255.0 - MEAN) / STD;
-            input[[0, 1, y, x]] = (g as f32 / 255.0 - MEAN) / STD;
-            input[[0, 2, y, x]] = (b as f32 / 255.0 - MEAN) / STD;
-        }
-
-        Ok(input)
-    }
-
-    fn run_model(
-        &mut self,
-        input: &ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
-    ) -> OcrResult<Vec<(char, f32)>> {
-        if self.session.is_none() {
-            let mut config = ScheduleConfig::new();
-            config.set_type(ForwardType::Auto);
-
-            let mut backend_config = BackendConfig::new();
-            // 使用更低精度以提升性能
-            backend_config.set_precision_mode(PrecisionMode::Low);
-            backend_config.set_power_mode(PowerMode::High);
-
-            config.set_backend_config(backend_config);
-
-            let session = self.interpreter.create_session(config)?;
-            self.session = Some(session);
-        }
-
-        // 获取输入输出张量列表，然后取第一个
-        let (input_tensor_info, output_tensor_info) = {
-            let session = self.session.as_ref().unwrap();
-            let inputs = self.interpreter.inputs(session);
-            let outputs = self.interpreter.outputs(session);
-
-            // 获取第一个输入和输出张量的信息
-            let input_info = inputs.iter().next().unwrap();
-            let output_info = outputs.iter().next().unwrap();
-
-            (
-                input_info.name().to_string(),
-                output_info.name().to_string(),
-            )
-        };
-
-        let input_shape = input.shape();
-        {
-            let session = self.session.as_mut().unwrap();
-            let mut input_tensor = unsafe {
-                self.interpreter
-                    .input_unresized::<f32>(session, &input_tensor_info)?
-            };
-
-            self.interpreter.resize_tensor(
-                &mut input_tensor,
-                [
-                    input_shape[0] as i32,
-                    input_shape[1] as i32,
-                    input_shape[2] as i32,
-                    input_shape[3] as i32,
-                ],
-            );
-
-            drop(input_tensor);
-
-            self.interpreter.resize_session(session);
-        }
-
-        let (output_data, output_shape) = {
-            let session = self.session.as_mut().unwrap();
-            let mut input_tensor = self.interpreter.input::<f32>(session, &input_tensor_info)?;
-
-            if let Some(flat_data) = input.as_slice() {
-                let mut host_tensor = input_tensor.create_host_tensor_from_device(false);
-                let host_data_mut = host_tensor.host_mut();
-                host_data_mut.copy_from_slice(flat_data);
-                input_tensor.copy_from_host_tensor(&host_tensor)?;
-            } else {
-                let mut host_tensor = input_tensor.create_host_tensor_from_device(false);
-                let host_data_mut = host_tensor.host_mut();
-                for (i, val) in input.iter().enumerate() {
-                    host_data_mut[i] = *val;
-                }
-                input_tensor.copy_from_host_tensor(&host_tensor)?;
-            }
-
-            self.interpreter.run_session(session)?;
-
-            let output = self
-                .interpreter
-                .output::<f32>(session, &output_tensor_info)?;
-            output.wait(mnn::ffi::MapType::MAP_TENSOR_READ, true);
-
-            let shape = output.shape();
-            let output_host_tensor = output.create_host_tensor_from_device(true);
-            (output_host_tensor.host().to_vec(), shape)
-        };
-
-        let sequence_length = output_shape[1] as usize;
-        let vocab_size = output_shape[2] as usize;
-
-        let mut results = Vec::with_capacity(sequence_length);
-        let mut last_char: Option<char> = None;
-
-        for i in 0..sequence_length {
-            let mut max_idx = 0;
-            let mut max_score = 0.0f32;
-
-            for j in 0..vocab_size {
-                let offset = i * vocab_size + j;
-                if offset < output_data.len() && output_data[offset] > max_score {
-                    max_score = output_data[offset];
-                    max_idx = j;
-                }
-            }
-
-            if max_idx > 0 && max_idx < self.keys.len() {
-                if let Some(&ch) = self.keys.get(max_idx) {
-                    let threshold = if self.is_punctuation(ch) {
-                        self.punct_min_score
-                    } else {
-                        self.min_score
-                    };
-
-                    if max_score > threshold {
-                        if last_char != Some(ch) || self.is_punctuation(ch) {
-                            results.push((ch, max_score));
-                        }
-                        last_char = Some(ch);
-                    } else {
-                        if self.is_punctuation(ch) && max_score > self.punct_min_score * 0.8 {
-                            results.push((ch, max_score));
-                        } else {
-                            last_char = None;
-                        }
-                    }
-                }
-            } else {
-                last_char = None;
-            }
-        }
-
-        let mut final_results = Vec::with_capacity(results.len());
-        let mut i = 0;
-        while i < results.len() {
-            let (ch, score) = results[i];
-            final_results.push((ch, score));
-
-            if self.is_punctuation(ch) {
-                while i + 1 < results.len() && results[i + 1].0 == ch {
-                    i += 1;
-                }
-            }
-
-            i += 1;
-        }
-
-        Ok(final_results)
+    /// 判断是否为标点符号
+    fn is_punctuation(ch: char) -> bool {
+        PUNCTUATIONS.contains(&ch)
     }
 }
 
-impl Drop for Rec {
-    fn drop(&mut self) {
-        if let Some(session) = self.session.take() {
-            drop(session);
-        }
+/// 底层识别 API
+impl RecModel {
+    /// 原始推理接口
+    ///
+    /// 直接执行模型推理，不进行预处理和后处理
+    ///
+    /// # 参数
+    /// - `input`: 预处理后的输入张量 [1, 3, H, W]
+    ///
+    /// # 返回
+    /// 模型原始输出
+    pub fn run_raw(&self, input: ndarray::ArrayViewD<f32>) -> OcrResult<ArrayD<f32>> {
+        Ok(self.engine.run_dynamic(input)?)
+    }
+
+    /// 获取模型输入形状
+    pub fn input_shape(&self) -> &[usize] {
+        self.engine.input_shape()
+    }
+
+    /// 获取模型输出形状
+    pub fn output_shape(&self) -> &[usize] {
+        self.engine.output_shape()
+    }
+
+    /// 获取字符集
+    pub fn charset(&self) -> &[char] {
+        &self.charset
+    }
+
+    /// 根据索引获取字符
+    pub fn get_char(&self, index: usize) -> Option<char> {
+        self.charset.get(index).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rec_options_default() {
+        let opts = RecOptions::default();
+        assert_eq!(opts.target_height, 48);
+        assert_eq!(opts.min_score, 0.3);
+        assert_eq!(opts.punct_min_score, 0.1);
+        assert_eq!(opts.batch_size, 8);
+        assert!(opts.enable_batch);
+    }
+
+    #[test]
+    fn test_rec_options_builder() {
+        let opts = RecOptions::new()
+            .with_target_height(32)
+            .with_min_score(0.6)
+            .with_punct_min_score(0.2)
+            .with_batch_size(16)
+            .with_batch(false);
+
+        assert_eq!(opts.target_height, 32);
+        assert_eq!(opts.min_score, 0.6);
+        assert_eq!(opts.punct_min_score, 0.2);
+        assert_eq!(opts.batch_size, 16);
+        assert!(!opts.enable_batch);
+    }
+
+    #[test]
+    fn test_recognition_result_new() {
+        let char_scores = vec![
+            ('H', 0.99),
+            ('e', 0.94),
+            ('l', 0.93),
+            ('l', 0.95),
+            ('o', 0.94),
+        ];
+        let result = RecognitionResult::new("Hello".to_string(), 0.95, char_scores.clone());
+
+        assert_eq!(result.text, "Hello");
+        assert_eq!(result.confidence, 0.95);
+        assert_eq!(result.char_scores.len(), 5);
+        assert_eq!(result.char_scores[0].0, 'H');
+        assert_eq!(result.char_scores[0].1, 0.99);
+    }
+
+    #[test]
+    fn test_recognition_result_is_valid() {
+        let result = RecognitionResult::new(
+            "Hello".to_string(),
+            0.95,
+            vec![
+                ('H', 0.99),
+                ('e', 0.94),
+                ('l', 0.93),
+                ('l', 0.95),
+                ('o', 0.94),
+            ],
+        );
+
+        assert!(result.is_valid(0.9));
+        assert!(result.is_valid(0.95));
+        assert!(!result.is_valid(0.96));
+        assert!(!result.is_valid(0.99));
+    }
+
+    #[test]
+    fn test_recognition_result_empty() {
+        let result = RecognitionResult::new(String::new(), 0.0, vec![]);
+
+        assert!(result.text.is_empty());
+        assert_eq!(result.confidence, 0.0);
+        assert!(!result.is_valid(0.1));
+    }
+
+    #[test]
+    fn test_is_punctuation_common() {
+        // 英文标点
+        assert!(RecModel::is_punctuation(','));
+        assert!(RecModel::is_punctuation('.'));
+        assert!(RecModel::is_punctuation('!'));
+        assert!(RecModel::is_punctuation('?'));
+        assert!(RecModel::is_punctuation(';'));
+        assert!(RecModel::is_punctuation(':'));
+        assert!(RecModel::is_punctuation('"'));
+        assert!(RecModel::is_punctuation('\''));
+    }
+
+    #[test]
+    fn test_is_punctuation_chinese() {
+        // 中文标点
+        assert!(RecModel::is_punctuation('，'));
+        assert!(RecModel::is_punctuation('。'));
+        assert!(RecModel::is_punctuation('！'));
+        assert!(RecModel::is_punctuation('？'));
+        assert!(RecModel::is_punctuation('；'));
+        assert!(RecModel::is_punctuation('：'));
+        assert!(RecModel::is_punctuation('、'));
+        assert!(RecModel::is_punctuation('—'));
+        assert!(RecModel::is_punctuation('…'));
+    }
+
+    #[test]
+    fn test_is_punctuation_brackets() {
+        assert!(RecModel::is_punctuation('('));
+        assert!(RecModel::is_punctuation(')'));
+        assert!(RecModel::is_punctuation('['));
+        assert!(RecModel::is_punctuation(']'));
+        assert!(RecModel::is_punctuation('{'));
+        assert!(RecModel::is_punctuation('}'));
+        assert!(RecModel::is_punctuation('「'));
+        assert!(RecModel::is_punctuation('」'));
+        assert!(RecModel::is_punctuation('《'));
+        assert!(RecModel::is_punctuation('》'));
+    }
+
+    #[test]
+    fn test_is_punctuation_false() {
+        // 非标点字符
+        assert!(!RecModel::is_punctuation('A'));
+        assert!(!RecModel::is_punctuation('z'));
+        assert!(!RecModel::is_punctuation('0'));
+        assert!(!RecModel::is_punctuation('中'));
+        assert!(!RecModel::is_punctuation('文'));
+        assert!(!RecModel::is_punctuation(' '));
     }
 }

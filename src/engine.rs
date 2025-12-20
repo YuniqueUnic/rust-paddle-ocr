@@ -1,835 +1,465 @@
-use crate::{Det, OcrError, OcrResult, Rec};
+//! OCR 引擎
+//!
+//! OCR Engine
+//!
+//! 提供完整的 OCR 流程封装，一次调用完成检测和识别
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
 use image::DynamicImage;
-use imageproc::rect::Rect;
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-    thread,
-};
+use std::path::Path;
 
-/// OCR请求类型
-///
-/// Types of OCR requests
-#[derive(Debug)]
-pub enum OcrRequest {
-    /// 文本检测请求
-    /// Text detection request
-    DetectText {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<Vec<DynamicImage>>>,
-    },
-    /// 文本识别请求
-    /// Text recognition request
-    RecognizeText {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<String>>,
-    },
-    /// 完整OCR处理请求
-    /// Full OCR processing request
-    ProcessOcr {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<Vec<String>>>,
-    },
-    /// 获取文本区域矩形框请求
-    /// Get text region rectangles request
-    GetTextRects {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<Vec<Rect>>>,
-    },
-    /// 获取文本区域图像请求
-    /// Get text region images request
-    GetTextImages {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<Vec<DynamicImage>>>,
-    },
-    /// 使用高效裁剪获取文本区域图像请求
-    /// Get text region images using efficient cropping
-    GetTextImagesEfficient {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<Vec<DynamicImage>>>,
-    },
-    /// 使用高效裁剪的完整OCR处理请求
-    /// Full OCR processing request with efficient cropping
-    ProcessOcrEfficient {
-        /// 输入图像
-        /// Input image
-        image: DynamicImage,
-        /// 结果发送通道
-        /// Result sender channel
-        result_sender: Sender<OcrResult<Vec<String>>>,
-    },
-    /// 关闭引擎请求
-    /// Shutdown engine request
-    Shutdown,
+use crate::det::{DetModel, DetOptions};
+use crate::error::OcrResult;
+use crate::mnn::{Backend, InferenceConfig, PrecisionMode};
+use crate::postprocess::TextBox;
+use crate::rec::{RecModel, RecOptions, RecognitionResult};
+
+/// OCR 结果
+#[derive(Debug, Clone)]
+pub struct OcrResult_ {
+    /// 识别的文本
+    pub text: String,
+    /// 置信度
+    pub confidence: f32,
+    /// 边界框
+    pub bbox: TextBox,
 }
 
-/// 线程安全的OCR引擎管理器
+impl OcrResult_ {
+    /// 创建新的 OCR 结果
+    pub fn new(text: String, confidence: f32, bbox: TextBox) -> Self {
+        Self {
+            text,
+            confidence,
+            bbox,
+        }
+    }
+}
+
+/// OCR 引擎配置
+#[derive(Debug, Clone)]
+pub struct OcrEngineConfig {
+    /// 推理后端
+    pub backend: Backend,
+    /// 线程数
+    pub thread_count: i32,
+    /// 精度模式
+    pub precision_mode: PrecisionMode,
+    /// 检测选项
+    pub det_options: DetOptions,
+    /// 识别选项
+    pub rec_options: RecOptions,
+    /// 是否启用并行识别（使用 rayon 对多个文本区域并行处理）
+    pub enable_parallel: bool,
+}
+
+impl Default for OcrEngineConfig {
+    fn default() -> Self {
+        Self {
+            backend: Backend::CPU,
+            thread_count: 4,
+            precision_mode: PrecisionMode::Normal,
+            det_options: DetOptions::default(),
+            rec_options: RecOptions::default(),
+            enable_parallel: false, // 默认禁用，避免与 MNN 线程池冲突
+        }
+    }
+}
+
+impl OcrEngineConfig {
+    /// 创建新的配置
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 设置推理后端
+    pub fn with_backend(mut self, backend: Backend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// 设置线程数
+    pub fn with_threads(mut self, threads: i32) -> Self {
+        self.thread_count = threads;
+        self
+    }
+
+    /// 设置精度模式
+    pub fn with_precision(mut self, precision: PrecisionMode) -> Self {
+        self.precision_mode = precision;
+        self
+    }
+
+    /// 设置检测选项
+    pub fn with_det_options(mut self, options: DetOptions) -> Self {
+        self.det_options = options;
+        self
+    }
+
+    /// 设置识别选项
+    pub fn with_rec_options(mut self, options: RecOptions) -> Self {
+        self.rec_options = options;
+        self
+    }
+
+    /// 启用/禁用并行处理
+    ///
+    /// 注意：当检测到多个文本区域时，使用 rayon 并行识别。
+    /// 如果 MNN 已经设置多线程，启用此选项可能导致过多线程竞争。
+    pub fn with_parallel(mut self, enable: bool) -> Self {
+        self.enable_parallel = enable;
+        self
+    }
+
+    /// 快速模式预设
+    pub fn fast() -> Self {
+        Self {
+            precision_mode: PrecisionMode::Low,
+            det_options: DetOptions::fast(),
+            ..Default::default()
+        }
+    }
+
+    /// 平衡模式预设
+    pub fn balanced() -> Self {
+        Self {
+            det_options: DetOptions::balanced(),
+            ..Default::default()
+        }
+    }
+
+    /// 高精度模式预设
+    pub fn high_precision() -> Self {
+        Self {
+            precision_mode: PrecisionMode::High,
+            det_options: DetOptions::high_precision(),
+            rec_options: RecOptions::new().with_min_score(0.4),
+            ..Default::default()
+        }
+    }
+
+    /// GPU 模式预设 (Metal)
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub fn gpu() -> Self {
+        Self {
+            backend: Backend::Metal,
+            ..Default::default()
+        }
+    }
+
+    /// GPU 模式预设 (OpenCL)
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub fn gpu() -> Self {
+        Self {
+            backend: Backend::OpenCL,
+            ..Default::default()
+        }
+    }
+
+    fn to_inference_config(&self) -> InferenceConfig {
+        InferenceConfig {
+            thread_count: self.thread_count,
+            precision_mode: self.precision_mode,
+            backend: self.backend,
+            ..Default::default()
+        }
+    }
+}
+
+/// OCR 引擎
 ///
-/// Thread-safe OCR engine manager
+/// 封装完整的 OCR 流程，包括文本检测和识别
+///
+/// # 示例
+///
+/// ```ignore
+/// use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+///
+/// // 创建引擎
+/// let engine = OcrEngine::new(
+///     "det_model.mnn",
+///     "rec_model.mnn",
+///     "ppocr_keys.txt",
+///     None,
+/// )?;
+///
+/// // 识别图像
+/// let image = image::open("test.jpg")?;
+/// let results = engine.recognize(&image)?;
+///
+/// for result in results {
+///     println!("{}: {:.2}", result.text, result.confidence);
+/// }
+/// ```
 pub struct OcrEngine {
-    request_sender: Sender<OcrRequest>,
-    worker_handle: Option<thread::JoinHandle<()>>,
+    det_model: DetModel,
+    rec_model: RecModel,
+    config: OcrEngineConfig,
 }
 
 impl OcrEngine {
-    /// 创建并启动一个新的OCR引擎实例
+    /// 从模型文件创建 OCR 引擎
     ///
-    /// Create and start a new OCR engine instance
+    /// # 参数
+    /// - `det_model_path`: 检测模型文件路径
+    /// - `rec_model_path`: 识别模型文件路径
+    /// - `charset_path`: 字符集文件路径
+    /// - `config`: 可选的引擎配置
     pub fn new(
         det_model_path: impl AsRef<Path>,
         rec_model_path: impl AsRef<Path>,
-        keys_path: impl AsRef<Path>,
+        charset_path: impl AsRef<Path>,
+        config: Option<OcrEngineConfig>,
     ) -> OcrResult<Self> {
-        Self::new_with_config(
-            det_model_path,
-            rec_model_path,
-            keys_path,
-            Det::RECT_BORDER_SIZE,
-            false,
-            Det::DEFAULT_MERGE_THRESHOLD,
-        )
-    }
+        let config = config.unwrap_or_default();
+        let inference_config = config.to_inference_config();
 
-    /// 创建并启动一个带有自定义配置的OCR引擎实例
-    ///
-    /// Create and start a new OCR engine instance with custom configuration
-    pub fn new_with_config(
-        det_model_path: impl AsRef<Path>,
-        rec_model_path: impl AsRef<Path>,
-        keys_path: impl AsRef<Path>,
-        rect_border_size: u32,
-        merge_boxes: bool,
-        merge_threshold: i32,
-    ) -> OcrResult<Self> {
-        // 创建通信通道
-        let (tx, rx) = unbounded();
+        // 优化：直接移动配置，避免多次克隆
+        let det_options = config.det_options.clone();
+        let rec_options = config.rec_options.clone();
 
-        // 创建工作线程，该线程将持有OCR模型
-        let worker_handle = thread::spawn({
-            let det_path = det_model_path.as_ref().to_path_buf();
-            let rec_path = rec_model_path.as_ref().to_path_buf();
-            let keys = keys_path.as_ref().to_path_buf();
+        let det_model = DetModel::from_file(det_model_path, Some(inference_config.clone()))?
+            .with_options(det_options);
 
-            move || match Self::run_worker(
-                det_path,
-                rec_path,
-                keys,
-                rx,
-                rect_border_size,
-                merge_boxes,
-                merge_threshold,
-            ) {
-                Ok(_) => {}
-                Err(e) => eprintln!("OCR worker error: {}", e),
-            }
-        });
+        let rec_model = RecModel::from_file(rec_model_path, charset_path, Some(inference_config))?
+            .with_options(rec_options);
 
         Ok(Self {
-            request_sender: tx,
-            worker_handle: Some(worker_handle),
+            det_model,
+            rec_model,
+            config,
         })
     }
 
-    /// 创建并启动一个带有自定义配置和字节数据的OCR引擎实例
-    ///
-    /// Create and start a new OCR engine instance with custom configuration and byte data
-    pub fn new_with_config_and_bytes(
-        det_model_data: &[u8],
-        rec_model_data: &[u8],
-        keys_data: &[u8],
-        rect_border_size: u32,
-        merge_boxes: bool,
-        merge_threshold: i32,
+    /// 从模型字节创建 OCR 引擎
+    pub fn from_bytes(
+        det_model_bytes: &[u8],
+        rec_model_bytes: &[u8],
+        charset_bytes: &[u8],
+        config: Option<OcrEngineConfig>,
     ) -> OcrResult<Self> {
-        // 创建通信通道
-        let (tx, rx) = unbounded();
+        let config = config.unwrap_or_default();
+        let inference_config = config.to_inference_config();
 
-        // 克隆字节数据，准备传递给工作线程
-        let det_data = det_model_data.to_vec();
-        let rec_data = rec_model_data.to_vec();
-        let keys = keys_data.to_vec();
+        // 优化：直接移动配置，避免多次克隆
+        let det_options = config.det_options.clone();
+        let rec_options = config.rec_options.clone();
 
-        // 创建工作线程，该线程将持有OCR模型
-        let worker_handle = thread::spawn(move || {
-            match Self::run_worker_with_bytes(
-                det_data,
-                rec_data,
-                keys,
-                rx,
-                rect_border_size,
-                merge_boxes,
-                merge_threshold,
-            ) {
-                Ok(_) => {}
-                Err(e) => eprintln!("OCR worker error: {}", e),
-            }
-        });
+        let det_model = DetModel::from_bytes(det_model_bytes, Some(inference_config.clone()))?
+            .with_options(det_options);
+
+        let rec_model = RecModel::from_bytes_with_charset(
+            rec_model_bytes,
+            charset_bytes,
+            Some(inference_config),
+        )?
+        .with_options(rec_options);
 
         Ok(Self {
-            request_sender: tx,
-            worker_handle: Some(worker_handle),
+            det_model,
+            rec_model,
+            config,
         })
     }
 
-    /// 在图像中检测文本区域
-    ///
-    /// Detect text regions in the image
-    pub fn detect_text(&self, image: DynamicImage) -> OcrResult<Vec<DynamicImage>> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::DetectText {
-                image,
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 获取文本区域的矩形框
-    ///
-    /// Get text region rectangles
-    pub fn get_text_rects(&self, image: &DynamicImage) -> OcrResult<Vec<Rect>> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::GetTextRects {
-                image: image.clone(),
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 获取文本区域图像
-    ///
-    /// Get text region images
-    pub fn get_text_images(&self, image: &DynamicImage) -> OcrResult<Vec<DynamicImage>> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::GetTextImages {
-                image: image.clone(),
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 识别图像中的文本
-    ///
-    /// Recognize text in the image
-    pub fn recognize_text(&self, image: DynamicImage) -> OcrResult<String> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::RecognizeText {
-                image,
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 完整的OCR处理，检测并识别图像中的所有文本
-    ///
-    /// Complete OCR processing, detecting and recognizing all text in the image
-    pub fn process_ocr(&self, image: DynamicImage) -> OcrResult<Vec<String>> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::ProcessOcr {
-                image,
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 使用高效裁剪获取文本区域图像
-    ///
-    /// Get text region images using efficient cropping
-    pub fn get_text_images_efficient(&self, image: &DynamicImage) -> OcrResult<Vec<DynamicImage>> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::GetTextImagesEfficient {
-                image: image.clone(),
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 使用高效裁剪的完整OCR处理
-    ///
-    /// Complete OCR processing using efficient cropping
-    pub fn process_ocr_efficient(&self, image: DynamicImage) -> OcrResult<Vec<String>> {
-        // 创建结果通道
-        let (result_tx, result_rx) = unbounded();
-
-        // 发送请求
-        self.request_sender
-            .send(OcrRequest::ProcessOcrEfficient {
-                image,
-                result_sender: result_tx,
-            })
-            .map_err(|_| {
-                OcrError::EngineError("OCR engine worker thread has terminated".to_string())
-            })?;
-
-        // 等待结果
-        result_rx.recv().map_err(|_| {
-            OcrError::EngineError("Failed to receive result from worker thread".to_string())
-        })?
-    }
-
-    /// 工作线程的主处理函数
-    ///
-    /// Main processing function for the worker thread
-    fn run_worker(
+    /// 只创建检测引擎
+    pub fn det_only(
         det_model_path: impl AsRef<Path>,
+        config: Option<OcrEngineConfig>,
+    ) -> OcrResult<DetOnlyEngine> {
+        let config = config.unwrap_or_default();
+        let inference_config = config.to_inference_config();
+
+        let det_model = DetModel::from_file(det_model_path, Some(inference_config))?
+            .with_options(config.det_options);
+
+        Ok(DetOnlyEngine { det_model })
+    }
+
+    /// 只创建识别引擎
+    pub fn rec_only(
         rec_model_path: impl AsRef<Path>,
-        keys_path: impl AsRef<Path>,
-        receiver: Receiver<OcrRequest>,
-        rect_border_size: u32,
-        merge_boxes: bool,
-        merge_threshold: i32,
-    ) -> OcrResult<()> {
-        // 初始化模型，应用自定义配置
-        let mut det = Det::from_file(det_model_path)?
-            .with_rect_border_size(rect_border_size)
-            .with_merge_boxes(merge_boxes)
-            .with_merge_threshold(merge_threshold);
+        charset_path: impl AsRef<Path>,
+        config: Option<OcrEngineConfig>,
+    ) -> OcrResult<RecOnlyEngine> {
+        let config = config.unwrap_or_default();
+        let inference_config = config.to_inference_config();
 
-        let mut rec = Rec::from_file(rec_model_path, keys_path)?;
+        let rec_model = RecModel::from_file(rec_model_path, charset_path, Some(inference_config))?
+            .with_options(config.rec_options);
 
-        // 处理请求循环
-        for request in receiver {
-            match request {
-                OcrRequest::DetectText {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_img(&image);
-                    // 发送结果，忽略接收端可能已关闭的错误
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::GetTextRects {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_rect(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::GetTextImages {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_img(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::RecognizeText {
-                    image,
-                    result_sender,
-                } => {
-                    let result = rec.predict_str(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::ProcessOcr {
-                    image,
-                    result_sender,
-                } => {
-                    // 先检测文本区域
-                    match det.find_text_img(&image) {
-                        Ok(text_images) => {
-                            // 识别每个文本区域
-                            let mut results = Vec::with_capacity(text_images.len());
-                            for text_img in text_images {
-                                match rec.predict_str(&text_img) {
-                                    Ok(text) => results.push(text),
-                                    Err(e) => {
-                                        let _ = result_sender.send(Err(e));
-                                        break;
-                                    }
-                                }
-                            }
-                            let _ = result_sender.send(Ok(results));
-                        }
-                        Err(e) => {
-                            let _ = result_sender.send(Err(e));
-                        }
-                    }
-                }
-                OcrRequest::GetTextImagesEfficient {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_img_efficient(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::ProcessOcrEfficient {
-                    image,
-                    result_sender,
-                } => {
-                    // 使用高效裁剪先检测文本区域
-                    match det.find_text_img_efficient(&image) {
-                        Ok(text_images) => {
-                            // 识别每个文本区域
-                            let mut results = Vec::with_capacity(text_images.len());
-                            for text_img in text_images {
-                                match rec.predict_str(&text_img) {
-                                    Ok(text) => results.push(text),
-                                    Err(e) => {
-                                        let _ = result_sender.send(Err(e));
-                                        break;
-                                    }
-                                }
-                            }
-                            let _ = result_sender.send(Ok(results));
-                        }
-                        Err(e) => {
-                            let _ = result_sender.send(Err(e));
-                        }
-                    }
-                }
-                OcrRequest::Shutdown => {
-                    // 收到关闭请求，退出循环
-                    break;
-                }
-            }
-        }
-
-        Ok(())
+        Ok(RecOnlyEngine { rec_model })
     }
 
-    /// 使用字节数据的工作线程的主处理函数
+    /// 执行完整的 OCR 识别
     ///
-    /// Main processing function for the worker thread using byte data
-    fn run_worker_with_bytes(
-        det_model_data: Vec<u8>,
-        rec_model_data: Vec<u8>,
-        keys_data: Vec<u8>,
-        receiver: Receiver<OcrRequest>,
-        rect_border_size: u32,
-        merge_boxes: bool,
-        merge_threshold: i32,
-    ) -> OcrResult<()> {
-        // 直接从字节数据初始化模型
-        let mut det = Det::from_bytes(&det_model_data)?
-            .with_rect_border_size(rect_border_size)
-            .with_merge_boxes(merge_boxes)
-            .with_merge_threshold(merge_threshold);
+    /// # 参数
+    /// - `image`: 输入图像
+    ///
+    /// # 返回
+    /// OCR 结果列表，每个结果包含文本、置信度和边界框
+    pub fn recognize(&self, image: &DynamicImage) -> OcrResult<Vec<OcrResult_>> {
+        // 1. 检测文本区域
+        let detections = self.det_model.detect_and_crop(image)?;
 
-        let mut rec = Rec::from_bytes_with_keys(&rec_model_data, &keys_data)?;
-
-        // 处理请求循环
-        for request in receiver {
-            match request {
-                OcrRequest::DetectText {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_img(&image);
-                    // 发送结果，忽略接收端可能已关闭的错误
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::GetTextRects {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_rect(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::GetTextImages {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_img(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::RecognizeText {
-                    image,
-                    result_sender,
-                } => {
-                    let result = rec.predict_str(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::ProcessOcr {
-                    image,
-                    result_sender,
-                } => {
-                    // 先检测文本区域
-                    match det.find_text_img(&image) {
-                        Ok(text_images) => {
-                            // 识别每个文本区域
-                            let mut results = Vec::with_capacity(text_images.len());
-                            for text_img in text_images {
-                                match rec.predict_str(&text_img) {
-                                    Ok(text) => results.push(text),
-                                    Err(e) => {
-                                        let _ = result_sender.send(Err(e));
-                                        break;
-                                    }
-                                }
-                            }
-                            let _ = result_sender.send(Ok(results));
-                        }
-                        Err(e) => {
-                            let _ = result_sender.send(Err(e));
-                        }
-                    }
-                }
-                OcrRequest::GetTextImagesEfficient {
-                    image,
-                    result_sender,
-                } => {
-                    let result = det.find_text_img_efficient(&image);
-                    let _ = result_sender.send(result);
-                }
-                OcrRequest::ProcessOcrEfficient {
-                    image,
-                    result_sender,
-                } => {
-                    // 使用高效裁剪先检测文本区域
-                    match det.find_text_img_efficient(&image) {
-                        Ok(text_images) => {
-                            // 识别每个文本区域
-                            let mut results = Vec::with_capacity(text_images.len());
-                            for text_img in text_images {
-                                match rec.predict_str(&text_img) {
-                                    Ok(text) => results.push(text),
-                                    Err(e) => {
-                                        let _ = result_sender.send(Err(e));
-                                        break;
-                                    }
-                                }
-                            }
-                            let _ = result_sender.send(Ok(results));
-                        }
-                        Err(e) => {
-                            let _ = result_sender.send(Err(e));
-                        }
-                    }
-                }
-                OcrRequest::Shutdown => {
-                    // 收到关闭请求，退出循环
-                    break;
-                }
-            }
+        if detections.is_empty() {
+            return Ok(Vec::new());
         }
 
-        Ok(())
+        // 2. 批量识别（避免克隆）
+        let (images, boxes): (Vec<&DynamicImage>, Vec<TextBox>) = detections
+            .iter()
+            .map(|(img, bbox)| (img, bbox.clone()))
+            .unzip();
+
+        let rec_results = if self.config.enable_parallel && images.len() > 4 {
+            // 并行识别：对于多个文本区域，使用 rayon 并行处理
+            use rayon::prelude::*;
+            images
+                .par_iter()
+                .map(|img| self.rec_model.recognize(img))
+                .collect::<OcrResult<Vec<_>>>()?
+        } else {
+            // 序列识别：使用批量推理
+            self.rec_model.recognize_batch_ref(&images)?
+        };
+
+        // 3. 组合结果
+        let results: Vec<OcrResult_> = rec_results
+            .into_iter()
+            .zip(boxes)
+            .filter(|(rec, _)| !rec.text.is_empty())
+            .map(|(rec, bbox)| OcrResult_::new(rec.text, rec.confidence, bbox))
+            .collect();
+
+        Ok(results)
+    }
+
+    /// 只执行检测
+    pub fn detect(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
+        self.det_model.detect(image)
+    }
+
+    /// 只执行识别 (需要预先裁剪好的文本行图像)
+    pub fn recognize_text(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
+        self.rec_model.recognize(image)
+    }
+
+    /// 批量识别文本行图像
+    pub fn recognize_batch(&self, images: &[DynamicImage]) -> OcrResult<Vec<RecognitionResult>> {
+        self.rec_model.recognize_batch(images)
+    }
+
+    /// 获取检测模型引用
+    pub fn det_model(&self) -> &DetModel {
+        &self.det_model
+    }
+
+    /// 获取识别模型引用
+    pub fn rec_model(&self) -> &RecModel {
+        &self.rec_model
+    }
+
+    /// 获取配置
+    pub fn config(&self) -> &OcrEngineConfig {
+        &self.config
     }
 }
 
-impl Drop for OcrEngine {
-    fn drop(&mut self) {
-        // 发送关闭请求
-        let _ = self.request_sender.send(OcrRequest::Shutdown);
+/// 只有检测功能的引擎
+pub struct DetOnlyEngine {
+    det_model: DetModel,
+}
 
-        // 等待工作线程完成
-        if let Some(handle) = self.worker_handle.take() {
-            let _ = handle.join();
-        }
+impl DetOnlyEngine {
+    /// 检测图像中的文本区域
+    pub fn detect(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
+        self.det_model.detect(image)
+    }
+
+    /// 检测并返回裁剪后的图像
+    pub fn detect_and_crop(&self, image: &DynamicImage) -> OcrResult<Vec<(DynamicImage, TextBox)>> {
+        self.det_model.detect_and_crop(image)
+    }
+
+    /// 获取检测模型引用
+    pub fn model(&self) -> &DetModel {
+        &self.det_model
     }
 }
 
-/// 全局OCR引擎单例
+/// 只有识别功能的引擎
+pub struct RecOnlyEngine {
+    rec_model: RecModel,
+}
+
+impl RecOnlyEngine {
+    /// 识别单张图像
+    pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
+        self.rec_model.recognize(image)
+    }
+
+    /// 只返回文本
+    pub fn recognize_text(&self, image: &DynamicImage) -> OcrResult<String> {
+        self.rec_model.recognize_text(image)
+    }
+
+    /// 批量识别
+    pub fn recognize_batch(&self, images: &[DynamicImage]) -> OcrResult<Vec<RecognitionResult>> {
+        self.rec_model.recognize_batch(images)
+    }
+
+    /// 获取识别模型引用
+    pub fn model(&self) -> &RecModel {
+        &self.rec_model
+    }
+}
+
+/// 便捷函数：从文件识别
 ///
-/// Global OCR engine singleton
-pub struct OcrEngineManager {
-    // 私有构造函数，防止直接实例化
-    _private: (),
+/// # 示例
+///
+/// ```ignore
+/// let results = rust_paddle_ocr::ocr_file(
+///     "test.jpg",
+///     "det_model.mnn",
+///     "rec_model.mnn",
+///     "ppocr_keys.txt",
+/// )?;
+/// ```
+pub fn ocr_file(
+    image_path: impl AsRef<Path>,
+    det_model_path: impl AsRef<Path>,
+    rec_model_path: impl AsRef<Path>,
+    charset_path: impl AsRef<Path>,
+) -> OcrResult<Vec<OcrResult_>> {
+    let image = image::open(image_path)?;
+    let engine = OcrEngine::new(det_model_path, rec_model_path, charset_path, None)?;
+    engine.recognize(&image)
 }
 
-// 全局单例实例，使用 Arc<Mutex<>> 确保线程安全
-static INSTANCE: once_cell::sync::OnceCell<Arc<Mutex<Option<OcrEngine>>>> =
-    once_cell::sync::OnceCell::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl OcrEngineManager {
-    /// 初始化全局OCR引擎
-    ///
-    /// Initialize the global OCR engine
-    pub fn initialize(
-        det_model_path: impl AsRef<Path>,
-        rec_model_path: impl AsRef<Path>,
-        keys_path: impl AsRef<Path>,
-    ) -> OcrResult<()> {
-        let engine = OcrEngine::new(det_model_path, rec_model_path, keys_path)?;
+    #[test]
+    fn test_engine_config() {
+        let config = OcrEngineConfig::default();
+        assert_eq!(config.thread_count, 4);
+        assert_eq!(config.backend, Backend::CPU);
 
-        // 获取或初始化全局实例
-        let instance = INSTANCE.get_or_init(|| Arc::new(Mutex::new(None)));
+        let config = OcrEngineConfig::fast();
+        assert_eq!(config.precision_mode, PrecisionMode::Low);
 
-        // 更新引擎实例
-        let mut guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        *guard = Some(engine);
-
-        Ok(())
+        let config = OcrEngineConfig::high_precision();
+        assert_eq!(config.precision_mode, PrecisionMode::High);
     }
 
-    /// 使用自定义配置初始化全局OCR引擎
-    ///
-    /// Initialize the global OCR engine with custom configuration
-    pub fn initialize_with_config(
-        det_model_path: impl AsRef<Path>,
-        rec_model_path: impl AsRef<Path>,
-        keys_path: impl AsRef<Path>,
-        rect_border_size: u32,
-        merge_boxes: bool,
-        merge_threshold: i32,
-    ) -> OcrResult<()> {
-        let engine = OcrEngine::new_with_config(
-            det_model_path,
-            rec_model_path,
-            keys_path,
-            rect_border_size,
-            merge_boxes,
-            merge_threshold,
-        )?;
+    #[test]
+    fn test_ocr_result() {
+        let bbox = TextBox::new(imageproc::rect::Rect::at(0, 0).of_size(100, 20), 0.9);
+        let result = OcrResult_::new("Hello".to_string(), 0.95, bbox);
 
-        // 获取或初始化全局实例
-        let instance = INSTANCE.get_or_init(|| Arc::new(Mutex::new(None)));
-
-        // 更新引擎实例
-        let mut guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        *guard = Some(engine);
-
-        Ok(())
-    }
-
-    /// 使用自定义配置和字节数据初始化全局OCR引擎
-    ///
-    /// Initialize the global OCR engine with custom configuration and byte data
-    pub fn initialize_with_config_and_bytes(
-        det_model_data: &[u8],
-        rec_model_data: &[u8],
-        keys_data: &[u8],
-        rect_border_size: u32,
-        merge_boxes: bool,
-        merge_threshold: i32,
-    ) -> OcrResult<()> {
-        let engine = OcrEngine::new_with_config_and_bytes(
-            det_model_data,
-            rec_model_data,
-            keys_data,
-            rect_border_size,
-            merge_boxes,
-            merge_threshold,
-        )?;
-
-        // 获取或初始化全局实例
-        let instance = INSTANCE.get_or_init(|| Arc::new(Mutex::new(None)));
-
-        // 更新引擎实例
-        let mut guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        *guard = Some(engine);
-
-        Ok(())
-    }
-
-    /// 获取全局OCR引擎实例
-    ///
-    /// Get the global OCR engine instance
-    pub fn get_instance() -> OcrResult<Arc<Mutex<Option<OcrEngine>>>> {
-        INSTANCE
-            .get()
-            .cloned()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))
-    }
-
-    /// 在图像中检测文本区域
-    ///
-    /// Detect text regions in the image
-    pub fn detect_text(image: DynamicImage) -> OcrResult<Vec<DynamicImage>> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.detect_text(image)
-    }
-
-    /// 获取文本区域的矩形框
-    ///
-    /// Get text region rectangles
-    pub fn get_text_rects(image: &DynamicImage) -> OcrResult<Vec<Rect>> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.get_text_rects(image)
-    }
-
-    /// 获取文本区域图像
-    ///
-    /// Get text region images
-    pub fn get_text_images(image: &DynamicImage) -> OcrResult<Vec<DynamicImage>> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.get_text_images(image)
-    }
-
-    /// 识别图像中的文本
-    ///
-    /// Recognize text in the image
-    pub fn recognize_text(image: DynamicImage) -> OcrResult<String> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.recognize_text(image)
-    }
-
-    /// 完整的OCR处理，检测并识别图像中的所有文本
-    ///
-    /// Complete OCR processing, detecting and recognizing all text in the image
-    pub fn process_ocr(image: DynamicImage) -> OcrResult<Vec<String>> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.process_ocr(image)
-    }
-
-    /// 使用高效裁剪获取文本区域图像
-    ///
-    /// Get text region images using efficient cropping
-    pub fn get_text_images_efficient(image: &DynamicImage) -> OcrResult<Vec<DynamicImage>> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.get_text_images_efficient(image)
-    }
-
-    /// 使用高效裁剪的完整OCR处理
-    ///
-    /// Complete OCR processing using efficient cropping
-    pub fn process_ocr_efficient(image: DynamicImage) -> OcrResult<Vec<String>> {
-        let instance = Self::get_instance()?;
-        let guard = instance.lock().map_err(|_| {
-            OcrError::EngineError("Failed to acquire lock on OCR engine manager".to_string())
-        })?;
-
-        let engine = guard
-            .as_ref()
-            .ok_or_else(|| OcrError::EngineError("OCR engine not initialized".to_string()))?;
-
-        engine.process_ocr_efficient(image)
+        assert_eq!(result.text, "Hello");
+        assert_eq!(result.confidence, 0.95);
     }
 }

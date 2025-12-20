@@ -1,74 +1,58 @@
-// file_path: src/error.rs
+//! OCR 错误类型定义
+//!
+//! OCR Error Type Definitions
+
 use thiserror::Error;
 
-/// OCR处理过程中可能出现的错误类型
-///
-/// Error types that may occur during OCR processing
+use crate::mnn::MnnError;
+
+/// OCR 错误类型
 #[derive(Error, Debug)]
 pub enum OcrError {
-    /// IO错误，如文件读写失败
-    /// IO errors, such as file read/write failures
-    #[error("IO error: {0}")]
-    IOError(#[from] std::io::Error),
+    /// MNN 推理引擎错误
+    #[error("MNN 推理错误: {0}")]
+    MnnError(#[from] MnnError),
 
     /// 图像处理错误
-    /// Image processing errors
-    #[error("Image processing error: {0}")]
+    #[error("图像处理错误: {0}")]
     ImageError(#[from] image::ImageError),
-    
-    /// 命令行参数错误
-    /// Command line argument errors
-    #[error("Command line argument error: {0}")]
-    ArgError(String),
-    
-    /// JSON序列化/反序列化错误
-    /// JSON serialization/deserialization errors
-    #[error("JSON error: {0}")]
-    JsonError(String),
 
-    /// MNN推理框架错误
-    /// MNN inference framework errors
-    #[error("MNN error: {0}")]
-    MNNError(#[from] mnn::MNNError),
+    /// IO 错误
+    #[error("IO 错误: {0}")]
+    IoError(#[from] std::io::Error),
 
-    /// 张量形状错误
-    /// Tensor shape errors
-    #[error("Shape error: {0}")]
-    ShapeError(#[from] ndarray::ShapeError),
+    /// 无效参数错误
+    #[error("无效参数: {0}")]
+    InvalidParameter(String),
 
-    /// 输入张量数据错误
-    /// Input tensor data errors
-    #[error("Input tensor data error: {0}")]
-    InputError(String),
+    /// 模型加载错误
+    #[error("模型加载失败: {0}")]
+    ModelLoadError(String),
 
-    /// 输出张量数据错误
-    /// Output tensor data errors
-    #[error("Output tensor data error: {0}")]
-    OutputError(String),
+    /// 预处理错误
+    #[error("预处理错误: {0}")]
+    PreprocessError(String),
 
-    /// 模型推理错误
-    /// Model inference errors
-    #[error("Model inference error: {0}")]
-    InferenceError(String),
+    /// 后处理错误
+    #[error("后处理错误: {0}")]
+    PostprocessError(String),
 
-    /// 引擎错误
-    /// Engine errors
-    #[error("Engine error: {0}")]
-    EngineError(String),
+    /// 检测错误
+    #[error("检测错误: {0}")]
+    DetectionError(String),
 
-    /// 线程错误
-    /// Thread errors
-    #[error("Thread error: {0}")]
-    ThreadError(String),
+    /// 识别错误
+    #[error("识别错误: {0}")]
+    RecognitionError(String),
 
-    #[cfg(feature="fast_resize")]
-    /// 图像缩放错误
-    /// Image resize errors
-    #[error("Image resize error: {0}")]
-    ResizeError(#[from] fast_image_resize::ResizeError),
+    /// 未初始化错误
+    #[error("未初始化: {0}")]
+    NotInitialized(String),
+
+    /// 字符集解析错误
+    #[error("字符集解析错误: {0}")]
+    CharsetError(String),
 }
 
-/// OCR操作的结果类型
-///
-/// Result type for OCR operations
-pub type OcrResult<T> = Result<T, OcrError>;
+/// OCR 结果类型别名
+pub type OcrResult<T> = std::result::Result<T, OcrError>;

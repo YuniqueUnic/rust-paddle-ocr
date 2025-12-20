@@ -1,21 +1,27 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use image::DynamicImage;
-use rust_paddle_ocr::{Det, Rec};
+use rust_paddle_ocr::{DetModel, DetOptions, DetPrecisionMode, RecModel, RecOptions};
 use std::time::Duration;
 
-fn setup() -> (Det, Rec, DynamicImage) {
+fn setup() -> (DetModel, RecModel, DynamicImage) {
     // 加载模型 - 在性能测试前完成
-    let det = Det::from_file("./models/ch_PP-OCRv4_det_infer.mnn")
+    let det = DetModel::from_file("./models/ch_PP-OCRv4_det_infer.mnn", None)
         .expect("Failed to load detection model")
-        .with_rect_border_size(12)
-        .with_merge_boxes(false)
-        .with_merge_threshold(1);
+        .with_options(
+            DetOptions::new()
+                .with_box_border(12)
+                .with_merge_boxes(false)
+                .with_merge_threshold(1)
+                .with_precision_mode(DetPrecisionMode::Fast),
+        );
 
-    let rec = Rec::from_file(
+    let rec = RecModel::from_file(
         "./models/ch_PP-OCRv4_rec_infer.mnn",
         "./models/ppocr_keys_v4.txt",
+        None,
     )
-    .expect("Failed to load recognition model");
+    .expect("Failed to load recognition model")
+    .with_options(RecOptions::new());
 
     // 加载测试图片 - 在性能测试前完成
     let img = image::open("./res/1.png").expect("Failed to load test image");
@@ -24,14 +30,14 @@ fn setup() -> (Det, Rec, DynamicImage) {
 }
 
 fn bench_detection(c: &mut Criterion) {
-    let (mut det, _, img) = setup();
+    let (det, _, img) = setup();
 
     let mut group = c.benchmark_group("text_detection");
     group.measurement_time(Duration::from_secs(10));
 
     group.bench_function("det_model", |b| {
         b.iter(|| {
-            det.find_text_rect(&img).expect("Detection failed");
+            det.detect(&img).expect("Detection failed");
         });
     });
 
@@ -39,10 +45,12 @@ fn bench_detection(c: &mut Criterion) {
 }
 
 fn bench_recognition(c: &mut Criterion) {
-    let (mut det, mut rec, img) = setup();
+    let (det, rec, img) = setup();
 
-    // 先检测文本区域
-    let text_images = det.find_text_img(&img).expect("Failed to find text images");
+    // 先检测文本区域并裁剪
+    let detections = det
+        .detect_and_crop(&img)
+        .expect("Failed to detect and crop text images");
 
     let mut group = c.benchmark_group("text_recognition");
     group.measurement_time(Duration::from_secs(10));
@@ -50,8 +58,8 @@ fn bench_recognition(c: &mut Criterion) {
     group.bench_function("rec_model", |b| {
         b.iter(|| {
             // 仅测试第一个文本区域的识别，如果没有文本区域则跳过
-            if let Some(text_img) = text_images.first() {
-                rec.predict_str(text_img).expect("Recognition failed");
+            if let Some((text_img, _)) = detections.first() {
+                rec.recognize(text_img).expect("Recognition failed");
             }
         });
     });
@@ -59,30 +67,5 @@ fn bench_recognition(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_end_to_end(c: &mut Criterion) {
-    let (mut det, mut rec, img) = setup();
-
-    let mut group = c.benchmark_group("end_to_end");
-    group.measurement_time(Duration::from_secs(15));
-
-    group.bench_function("full_pipeline", |b| {
-        b.iter(|| {
-            // 端到端过程：检测 + 识别
-            let text_images = det.find_text_img(&img).expect("Failed to find text images");
-
-            for text_img in &text_images {
-                rec.predict_str(text_img).expect("Recognition failed");
-            }
-        });
-    });
-
-    group.finish();
-}
-
-criterion_group!(
-    benches,
-    bench_detection,
-    bench_recognition,
-    bench_end_to_end
-);
+criterion_group!(benches, bench_detection, bench_recognition,);
 criterion_main!(benches);

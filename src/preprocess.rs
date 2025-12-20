@@ -1,0 +1,518 @@
+//! 图像预处理工具
+//!
+//! Image Preprocessing Utilities
+//!
+//! 提供 OCR 所需的各种图像预处理功能
+
+use image::{DynamicImage, GenericImageView, RgbImage};
+use ndarray::{Array4, ArrayBase, Dim, OwnedRepr};
+
+/// 图像归一化参数
+#[derive(Debug, Clone)]
+pub struct NormalizeParams {
+    /// RGB 通道均值
+    pub mean: [f32; 3],
+    /// RGB 通道标准差
+    pub std: [f32; 3],
+}
+
+impl Default for NormalizeParams {
+    fn default() -> Self {
+        // ImageNet 标准化参数
+        Self {
+            mean: [0.485, 0.456, 0.406],
+            std: [0.229, 0.224, 0.225],
+        }
+    }
+}
+
+impl NormalizeParams {
+    /// PaddleOCR 检测模型使用的归一化参数
+    pub fn paddle_det() -> Self {
+        Self {
+            mean: [0.485, 0.456, 0.406],
+            std: [0.229, 0.224, 0.225],
+        }
+    }
+
+    /// PaddleOCR 识别模型使用的归一化参数
+    pub fn paddle_rec() -> Self {
+        Self {
+            mean: [0.5, 0.5, 0.5],
+            std: [0.5, 0.5, 0.5],
+        }
+    }
+}
+
+/// 计算需要填充到的尺寸 (32的倍数)
+#[inline]
+pub fn get_padded_size(size: u32) -> u32 {
+    ((size + 31) / 32) * 32
+}
+
+/// 将图像缩放到指定的最大边长
+///
+/// 保持宽高比，将最长边缩放到 max_side_len
+pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> DynamicImage {
+    let (w, h) = img.dimensions();
+    let max_dim = w.max(h);
+
+    if max_dim <= max_side_len {
+        return img.clone();
+    }
+
+    let scale = max_side_len as f64 / max_dim as f64;
+    let new_w = (w as f64 * scale).round() as u32;
+    let new_h = (h as f64 * scale).round() as u32;
+
+    img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3)
+}
+
+/// 将图像缩放到指定高度 (用于识别模型)
+///
+/// 保持宽高比缩放
+pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> DynamicImage {
+    let (w, h) = img.dimensions();
+
+    if h == target_height {
+        return img.clone();
+    }
+
+    let scale = target_height as f64 / h as f64;
+    let new_w = (w as f64 * scale).round() as u32;
+
+    img.resize_exact(new_w, target_height, image::imageops::FilterType::Lanczos3)
+}
+
+/// 将图像转换为检测模型的输入张量
+///
+/// 输出格式: [1, 3, H, W] (NCHW)
+pub fn preprocess_for_det(
+    img: &DynamicImage,
+    params: &NormalizeParams,
+) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+    let (w, h) = img.dimensions();
+    let pad_w = get_padded_size(w) as usize;
+    let pad_h = get_padded_size(h) as usize;
+
+    let mut input = Array4::<f32>::zeros((1, 3, pad_h, pad_w));
+    let rgb_img = img.to_rgb8();
+
+    // 归一化并填充
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let pixel = rgb_img.get_pixel(x as u32, y as u32);
+            let [r, g, b] = pixel.0;
+
+            input[[0, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
+            input[[0, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
+            input[[0, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
+        }
+    }
+
+    input
+}
+
+/// 将图像转换为识别模型的输入张量
+///
+/// 输出格式: [1, 3, H, W] (NCHW)
+/// 高度固定为 48 (或指定值)，宽度按比例缩放
+pub fn preprocess_for_rec(
+    img: &DynamicImage,
+    target_height: u32,
+    params: &NormalizeParams,
+) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+    let (w, h) = img.dimensions();
+
+    // 计算缩放后的宽度
+    let scale = target_height as f64 / h as f64;
+    let target_width = (w as f64 * scale).round() as u32;
+
+    // 缩放图像
+    let resized = if h != target_height {
+        img.resize_exact(
+            target_width,
+            target_height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        img.clone()
+    };
+
+    let rgb_img = resized.to_rgb8();
+    let (w, h) = (target_width as usize, target_height as usize);
+
+    let mut input = Array4::<f32>::zeros((1, 3, h, w));
+
+    for y in 0..h {
+        for x in 0..w {
+            let pixel = rgb_img.get_pixel(x as u32, y as u32);
+            let [r, g, b] = pixel.0;
+
+            input[[0, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
+            input[[0, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
+            input[[0, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
+        }
+    }
+
+    input
+}
+
+/// 批量预处理识别图像
+///
+/// 将多个图像处理为批次张量，所有图像填充到相同宽度
+pub fn preprocess_batch_for_rec(
+    images: &[DynamicImage],
+    target_height: u32,
+    params: &NormalizeParams,
+) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+    if images.is_empty() {
+        return Array4::<f32>::zeros((0, 3, target_height as usize, 0));
+    }
+
+    // 计算所有图像缩放后的宽度
+    let widths: Vec<u32> = images
+        .iter()
+        .map(|img| {
+            let (w, h) = img.dimensions();
+            let scale = target_height as f64 / h as f64;
+            (w as f64 * scale).round() as u32
+        })
+        .collect();
+
+    let max_width = *widths.iter().max().unwrap() as usize;
+    let batch_size = images.len();
+
+    let mut batch = Array4::<f32>::zeros((batch_size, 3, target_height as usize, max_width));
+
+    for (i, (img, &w)) in images.iter().zip(widths.iter()).enumerate() {
+        let resized = resize_to_height(img, target_height);
+        let rgb_img = resized.to_rgb8();
+
+        for y in 0..target_height as usize {
+            for x in 0..w as usize {
+                let pixel = rgb_img.get_pixel(x as u32, y as u32);
+                let [r, g, b] = pixel.0;
+
+                batch[[i, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
+                batch[[i, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
+                batch[[i, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
+            }
+        }
+    }
+
+    batch
+}
+
+/// 裁剪图像区域
+pub fn crop_image(img: &DynamicImage, x: u32, y: u32, width: u32, height: u32) -> DynamicImage {
+    img.crop_imm(x, y, width, height)
+}
+
+/// 将图像分块 (用于高精度模式)
+///
+/// # 参数
+/// - `img`: 输入图像
+/// - `block_size`: 分块大小
+/// - `overlap`: 重叠区域大小
+///
+/// # 返回
+/// 分块图像列表及其在原图中的位置 (x, y)
+pub fn split_into_blocks(
+    img: &DynamicImage,
+    block_size: u32,
+    overlap: u32,
+) -> Vec<(DynamicImage, u32, u32)> {
+    let (width, height) = img.dimensions();
+    let mut blocks = Vec::new();
+
+    let step = block_size - overlap;
+
+    let mut y = 0u32;
+    while y < height {
+        let mut x = 0u32;
+        while x < width {
+            let block_w = (block_size).min(width - x);
+            let block_h = (block_size).min(height - y);
+
+            let block = img.crop_imm(x, y, block_w, block_h);
+            blocks.push((block, x, y));
+
+            x += step;
+            if x + overlap >= width && x < width {
+                break;
+            }
+        }
+
+        y += step;
+        if y + overlap >= height && y < height {
+            break;
+        }
+    }
+
+    blocks
+}
+
+/// 将灰度掩码转换为二值掩码
+pub fn threshold_mask(mask: &[f32], threshold: f32) -> Vec<u8> {
+    mask.iter()
+        .map(|&v| if v > threshold { 255u8 } else { 0u8 })
+        .collect()
+}
+
+/// 创建灰度图像
+pub fn create_gray_image(data: &[u8], width: u32, height: u32) -> image::GrayImage {
+    image::GrayImage::from_raw(width, height, data.to_vec())
+        .unwrap_or_else(|| image::GrayImage::new(width, height))
+}
+
+/// 图像转 RGB
+pub fn to_rgb(img: &DynamicImage) -> RgbImage {
+    img.to_rgb8()
+}
+
+/// 从 RGB 数据创建图像
+pub fn rgb_to_image(data: &[u8], width: u32, height: u32) -> DynamicImage {
+    let rgb = RgbImage::from_raw(width, height, data.to_vec())
+        .unwrap_or_else(|| RgbImage::new(width, height));
+    DynamicImage::ImageRgb8(rgb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_padded_size() {
+        assert_eq!(get_padded_size(100), 128);
+        assert_eq!(get_padded_size(32), 32);
+        assert_eq!(get_padded_size(33), 64);
+        assert_eq!(get_padded_size(0), 0);
+        assert_eq!(get_padded_size(1), 32);
+        assert_eq!(get_padded_size(31), 32);
+        assert_eq!(get_padded_size(64), 64);
+        assert_eq!(get_padded_size(65), 96);
+    }
+
+    #[test]
+    fn test_normalize_params() {
+        let params = NormalizeParams::default();
+        assert_eq!(params.mean[0], 0.485);
+
+        let paddle = NormalizeParams::paddle_det();
+        assert_eq!(paddle.mean[0], 0.485);
+        assert_eq!(paddle.std[0], 0.229);
+    }
+
+    #[test]
+    fn test_normalize_params_paddle_rec() {
+        let params = NormalizeParams::paddle_rec();
+        assert_eq!(params.mean[0], 0.5);
+        assert_eq!(params.mean[1], 0.5);
+        assert_eq!(params.mean[2], 0.5);
+        assert_eq!(params.std[0], 0.5);
+        assert_eq!(params.std[1], 0.5);
+        assert_eq!(params.std[2], 0.5);
+    }
+
+    #[test]
+    fn test_resize_to_max_side_no_resize() {
+        let img = DynamicImage::new_rgb8(100, 50);
+        let resized = resize_to_max_side(&img, 200);
+
+        // 图像已经小于最大边，不应该缩放
+        assert_eq!(resized.width(), 100);
+        assert_eq!(resized.height(), 50);
+    }
+
+    #[test]
+    fn test_resize_to_max_side_width_limited() {
+        let img = DynamicImage::new_rgb8(1000, 500);
+        let resized = resize_to_max_side(&img, 500);
+
+        // 宽度是最大边，应该缩放到 500
+        assert_eq!(resized.width(), 500);
+        assert_eq!(resized.height(), 250);
+    }
+
+    #[test]
+    fn test_resize_to_max_side_height_limited() {
+        let img = DynamicImage::new_rgb8(500, 1000);
+        let resized = resize_to_max_side(&img, 500);
+
+        // 高度是最大边，应该缩放到 500
+        assert_eq!(resized.width(), 250);
+        assert_eq!(resized.height(), 500);
+    }
+
+    #[test]
+    fn test_resize_to_height() {
+        let img = DynamicImage::new_rgb8(200, 100);
+        let resized = resize_to_height(&img, 48);
+
+        assert_eq!(resized.height(), 48);
+        // 宽度应该按比例缩放: 200 * 48/100 = 96
+        assert_eq!(resized.width(), 96);
+    }
+
+    #[test]
+    fn test_resize_to_height_no_resize() {
+        let img = DynamicImage::new_rgb8(200, 48);
+        let resized = resize_to_height(&img, 48);
+
+        // 高度已经是目标高度，不应该缩放
+        assert_eq!(resized.height(), 48);
+        assert_eq!(resized.width(), 200);
+    }
+
+    #[test]
+    fn test_preprocess_for_det_shape() {
+        let img = DynamicImage::new_rgb8(100, 50);
+        let params = NormalizeParams::paddle_det();
+        let tensor = preprocess_for_det(&img, &params);
+
+        // 输出形状应该是 [1, 3, H, W]，H 和 W 是 32 的倍数
+        assert_eq!(tensor.shape()[0], 1);
+        assert_eq!(tensor.shape()[1], 3);
+        assert_eq!(tensor.shape()[2], 64); // 50 向上取整到 64
+        assert_eq!(tensor.shape()[3], 128); // 100 向上取整到 128
+    }
+
+    #[test]
+    fn test_preprocess_for_rec_shape() {
+        let img = DynamicImage::new_rgb8(200, 100);
+        let params = NormalizeParams::paddle_rec();
+        let tensor = preprocess_for_rec(&img, 48, &params);
+
+        // 输出高度应该是 48
+        assert_eq!(tensor.shape()[0], 1);
+        assert_eq!(tensor.shape()[1], 3);
+        assert_eq!(tensor.shape()[2], 48);
+        // 宽度应该按比例缩放: 200 * 48/100 = 96
+        assert_eq!(tensor.shape()[3], 96);
+    }
+
+    #[test]
+    fn test_preprocess_batch_for_rec_empty() {
+        let images: Vec<DynamicImage> = vec![];
+        let params = NormalizeParams::paddle_rec();
+        let tensor = preprocess_batch_for_rec(&images, 48, &params);
+
+        assert_eq!(tensor.shape()[0], 0);
+    }
+
+    #[test]
+    fn test_preprocess_batch_for_rec_single() {
+        let images = vec![DynamicImage::new_rgb8(200, 100)];
+        let params = NormalizeParams::paddle_rec();
+        let tensor = preprocess_batch_for_rec(&images, 48, &params);
+
+        assert_eq!(tensor.shape()[0], 1);
+        assert_eq!(tensor.shape()[1], 3);
+        assert_eq!(tensor.shape()[2], 48);
+    }
+
+    #[test]
+    fn test_preprocess_batch_for_rec_multiple() {
+        let images = vec![
+            DynamicImage::new_rgb8(200, 100),
+            DynamicImage::new_rgb8(300, 100),
+        ];
+        let params = NormalizeParams::paddle_rec();
+        let tensor = preprocess_batch_for_rec(&images, 48, &params);
+
+        assert_eq!(tensor.shape()[0], 2);
+        assert_eq!(tensor.shape()[1], 3);
+        assert_eq!(tensor.shape()[2], 48);
+        // 宽度应该是最大宽度: max(96, 144) = 144
+        assert_eq!(tensor.shape()[3], 144);
+    }
+
+    #[test]
+    fn test_crop_image() {
+        let img = DynamicImage::new_rgb8(200, 100);
+        let cropped = crop_image(&img, 50, 25, 100, 50);
+
+        assert_eq!(cropped.width(), 100);
+        assert_eq!(cropped.height(), 50);
+    }
+
+    #[test]
+    fn test_split_into_blocks() {
+        let img = DynamicImage::new_rgb8(500, 500);
+        let blocks = split_into_blocks(&img, 200, 50);
+
+        // 应该有多个块
+        assert!(!blocks.is_empty());
+
+        // 每个块的位置应该记录正确
+        for (block, x, y) in &blocks {
+            assert!(block.width() <= 200);
+            assert!(block.height() <= 200);
+            assert!(*x < 500);
+            assert!(*y < 500);
+        }
+    }
+
+    #[test]
+    fn test_split_into_blocks_small_image() {
+        let img = DynamicImage::new_rgb8(100, 100);
+        let blocks = split_into_blocks(&img, 200, 50);
+
+        // 图像小于块大小，应该只有一个块
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].1, 0); // x offset
+        assert_eq!(blocks[0].2, 0); // y offset
+    }
+
+    #[test]
+    fn test_threshold_mask() {
+        let mask = vec![0.1, 0.3, 0.5, 0.7, 0.9];
+        let binary = threshold_mask(&mask, 0.5);
+
+        assert_eq!(binary, vec![0, 0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn test_threshold_mask_all_below() {
+        let mask = vec![0.1, 0.2, 0.3, 0.4];
+        let binary = threshold_mask(&mask, 0.5);
+
+        assert_eq!(binary, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_threshold_mask_all_above() {
+        let mask = vec![0.6, 0.7, 0.8, 0.9];
+        let binary = threshold_mask(&mask, 0.5);
+
+        assert_eq!(binary, vec![255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn test_create_gray_image() {
+        let data = vec![128u8; 100];
+        let gray = create_gray_image(&data, 10, 10);
+
+        assert_eq!(gray.width(), 10);
+        assert_eq!(gray.height(), 10);
+    }
+
+    #[test]
+    fn test_to_rgb() {
+        let img = DynamicImage::new_rgb8(100, 50);
+        let rgb = to_rgb(&img);
+
+        assert_eq!(rgb.width(), 100);
+        assert_eq!(rgb.height(), 50);
+    }
+
+    #[test]
+    fn test_rgb_to_image() {
+        let data = vec![128u8; 300]; // 10x10 RGB
+        let img = rgb_to_image(&data, 10, 10);
+
+        assert_eq!(img.width(), 10);
+        assert_eq!(img.height(), 10);
+    }
+}
