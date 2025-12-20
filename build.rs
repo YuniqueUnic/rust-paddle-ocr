@@ -142,27 +142,24 @@ fn build_mnn_with_cmake(
         .define("MNN_PORTABLE_BUILD", "ON")
         .define("MNN_SEP_BUILD", "OFF");
 
-    if debug == "true" {
-        config.define("CMAKE_BUILD_TYPE", "Debug");
-    } else {
-        config.define("CMAKE_BUILD_TYPE", "Release");
-    }
-
-    // For Windows MSVC, set static runtime linking when using +crt-static
+    // For Windows, always use Release mode to ensure consistent CRT linking
     if os == "windows" {
+        config.define("CMAKE_BUILD_TYPE", "Release");
         // Check if we're using static CRT
         if env::var("CARGO_CFG_TARGET_FEATURE").map_or(false, |f| f.contains("crt-static")) {
-            // Use static MSVC runtime for both Debug and Release
-            // This matches Rust's +crt-static behavior
-            if debug == "true" {
-                config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreadedDebug");
-            } else {
-                config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
-            }
+            // Always use MultiThreaded (static release CRT) for Windows
+            config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
         }
         // For 32-bit Windows, ensure proper configuration
         if arch == "x86" {
             config.define("CMAKE_GENERATOR_PLATFORM", "Win32");
+        }
+    } else {
+        // For non-Windows platforms, respect debug flag
+        if debug == "true" {
+            config.define("CMAKE_BUILD_TYPE", "Debug");
+        } else {
+            config.define("CMAKE_BUILD_TYPE", "Release");
         }
     }
 

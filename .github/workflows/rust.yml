@@ -72,12 +72,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --verbose --target ${{ matrix.target }}
+          args: --verbose ${{ matrix.os == 'windows-2022' && '--release' || '' }} --target ${{ matrix.target }}
       
       - name: Run tests
         if: contains(matrix.target, 'x86_64')
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --verbose --target ${{ matrix.target }}
+          args: --verbose ${{ matrix.os == 'windows-2022' && '--release' || '' }} --target ${{ matrix.target }}
 
