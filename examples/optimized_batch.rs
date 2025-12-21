@@ -15,12 +15,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== OCR 批量识别性能优化示例 ===\n");
 
     // 模型路径
-    let det_model = "models/PP-OCRv5_mobile_det.mnn";
-    let rec_model = "models/PP-OCRv5_mobile_rec.mnn";
+    let det_model = "models/PP-OCRv5_mobile_det_fp16.mnn";
+    let rec_model = "models/PP-OCRv5_mobile_rec_fp16.mnn";
     let charset = "models/ppocr_keys_v5.txt";
 
     // 测试图像
-    let test_image = "res/test1.png";
+    let test_image = "res/Paste_1221144147238.png";
 
     if !std::path::Path::new(test_image).exists() {
         eprintln!("测试图像不存在: {}", test_image);
@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ============ 1. 默认配置（序列批量推理）============
     println!("1️⃣  默认配置 - 序列批量推理");
-    let config_default = OcrEngineConfig::balanced();
+    let config_default = OcrEngineConfig::fast();
 
     let engine_default = OcrEngine::new(det_model, rec_model, charset, Some(config_default))?;
     let image = image::open(test_image)?;
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ============ 2. 启用并行处理 ============
     println!("2️⃣  启用并行处理 - Rayon 并行识别");
-    let config_parallel = OcrEngineConfig::balanced().with_parallel(true);
+    let config_parallel = OcrEngineConfig::fast().with_parallel(true);
 
     let engine_parallel = OcrEngine::new(det_model, rec_model, charset, Some(config_parallel))?;
 
@@ -90,18 +90,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "⚠️  更慢"
         }
     );
-    println!();
-
-    println!("💡 优化说明：");
-    println!("   ✅ 实现了真正的批量推理（多图像同时处理）");
-    println!("   ✅ 减少了内存克隆（使用引用传递）");
-    println!("   ✅ 添加了并行处理选项（适合多文本区域场景）");
-    println!();
-
-    println!("⚠️  注意事项：");
-    println!("   • 并行处理适合：文本区域较多（>4个）的场景");
-    println!("   • 序列批量推理适合：文本区域较少的场景");
-    println!("   • 如果 MNN 已经使用多线程，并行处理可能反而变慢");
-
     Ok(())
 }

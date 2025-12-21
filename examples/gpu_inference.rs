@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config = OcrEngineConfig::new()
         .with_backend(backend)
         .with_threads(4)
-        .with_det_options(DetOptions::balanced());
+        .with_det_options(DetOptions::fast());
 
     println!("创建 OCR 引擎...");
     let create_start = Instant::now();

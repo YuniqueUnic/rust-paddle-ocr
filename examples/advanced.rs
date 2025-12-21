@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("加载检测模型...");
     let det_options = DetOptions::new()
         .with_max_side_len(1280)
-        .with_precision_mode(DetPrecisionMode::Balanced)
+        .with_precision_mode(DetPrecisionMode::Fast)
         .with_box_threshold(0.5)
         .with_score_threshold(0.3)
         .with_merge_boxes(true)

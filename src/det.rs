@@ -10,11 +10,8 @@ use std::path::Path;
 
 use crate::error::{OcrError, OcrResult};
 use crate::mnn::{InferenceConfig, InferenceEngine};
-use crate::postprocess::{
-    extract_boxes_with_unclip, merge_adjacent_boxes, merge_multi_scale_results, nms,
-    sort_boxes_by_reading_order, TextBox,
-};
-use crate::preprocess::{preprocess_for_det, split_into_blocks, NormalizeParams};
+use crate::postprocess::{extract_boxes_with_unclip, TextBox};
+use crate::preprocess::{preprocess_for_det, NormalizeParams};
 
 /// 检测精度模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -22,10 +19,6 @@ pub enum DetPrecisionMode {
     /// 快速模式 - 单次检测
     #[default]
     Fast,
-    /// 平衡模式 - 适度的多尺度检测
-    Balanced,
-    /// 高精度模式 - 完整的多尺度 + 分块检测
-    HighPrecision,
 }
 
 /// 检测选项
@@ -153,30 +146,6 @@ impl DetOptions {
             ..Default::default()
         }
     }
-
-    /// 平衡模式预设
-    pub fn balanced() -> Self {
-        Self {
-            max_side_len: 1280,
-            precision_mode: DetPrecisionMode::Balanced,
-            multi_scales: vec![0.75, 1.0, 1.25],
-            ..Default::default()
-        }
-    }
-
-    /// 高精度模式预设
-    pub fn high_precision() -> Self {
-        Self {
-            max_side_len: 1920,
-            precision_mode: DetPrecisionMode::HighPrecision,
-            multi_scales: vec![0.5, 0.75, 1.0, 1.25, 1.5],
-            block_size: 640,
-            block_overlap: 100,
-            box_threshold: 0.4,
-            score_threshold: 0.25,
-            ..Default::default()
-        }
-    }
 }
 
 /// 文本检测模型
@@ -238,11 +207,7 @@ impl DetModel {
     /// # 返回
     /// 检测到的文本边界框列表
     pub fn detect(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
-        match self.options.precision_mode {
-            DetPrecisionMode::Fast => self.detect_fast(image),
-            DetPrecisionMode::Balanced => self.detect_balanced(image),
-            DetPrecisionMode::HighPrecision => self.detect_high_precision(image),
-        }
+        self.detect_fast(image)
     }
 
     /// 检测并返回裁剪后的文本图像
@@ -309,98 +274,6 @@ impl DetModel {
     }
 
     /// 平衡模式检测 (多尺度)
-    fn detect_balanced(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
-        let (original_width, original_height) = image.dimensions();
-        let mut all_results = Vec::new();
-
-        for &scale in &self.options.multi_scales {
-            // 缩放图像
-            let new_w = (original_width as f32 * scale) as u32;
-            let new_h = (original_height as f32 * scale) as u32;
-
-            if new_w < 32 || new_h < 32 {
-                continue;
-            }
-
-            let scaled = image.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
-
-            // 检测
-            let boxes = self.detect_single_scale(&scaled, original_width, original_height)?;
-            all_results.push((boxes, 0, 0, scale));
-        }
-
-        // 合并结果
-        let merged = merge_multi_scale_results(&all_results, self.options.nms_threshold);
-        Ok(self.finalize_boxes(merged))
-    }
-
-    /// 高精度检测 (多尺度 + 分块)
-    fn detect_high_precision(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
-        let (original_width, original_height) = image.dimensions();
-        let mut all_results = Vec::new();
-
-        // 1. 多尺度检测
-        for &scale in &self.options.multi_scales {
-            let new_w = (original_width as f32 * scale) as u32;
-            let new_h = (original_height as f32 * scale) as u32;
-
-            if new_w < 32 || new_h < 32 {
-                continue;
-            }
-
-            let scaled = image.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
-
-            let boxes = self.detect_single_scale(&scaled, original_width, original_height)?;
-            all_results.push((boxes, 0, 0, scale));
-        }
-
-        // 2. 分块检测 (对于大图像)
-        if original_width > self.options.block_size || original_height > self.options.block_size {
-            let blocks =
-                split_into_blocks(image, self.options.block_size, self.options.block_overlap);
-
-            for (block, offset_x, offset_y) in blocks {
-                let boxes = self.detect_single_scale(&block, block.width(), block.height())?;
-                all_results.push((boxes, offset_x, offset_y, 1.0));
-            }
-        }
-
-        // 合并所有结果
-        let merged = merge_multi_scale_results(&all_results, self.options.nms_threshold);
-        Ok(self.finalize_boxes(merged))
-    }
-
-    /// 单尺度检测
-    fn detect_single_scale(
-        &self,
-        image: &DynamicImage,
-        original_width: u32,
-        original_height: u32,
-    ) -> OcrResult<Vec<TextBox>> {
-        let (scaled_width, scaled_height) = image.dimensions();
-
-        // 预处理
-        let input = preprocess_for_det(image, &self.normalize_params);
-
-        // 推理 (使用动态形状)
-        let output = self.engine.run_dynamic(input.view().into_dyn())?;
-
-        // 后处理 - 输出形状与输入相同（包括 padding）
-        let output_shape = output.shape();
-        let out_w = output_shape[3] as u32;
-        let out_h = output_shape[2] as u32;
-
-        self.postprocess_output(
-            &output,
-            out_w,
-            out_h,
-            scaled_width,
-            scaled_height,
-            original_width,
-            original_height,
-        )
-    }
-
     /// 缩放图像到最大边长限制
     fn scale_image(&self, image: &DynamicImage) -> DynamicImage {
         let (w, h) = image.dimensions();
@@ -467,22 +340,6 @@ impl DetModel {
 
         Ok(boxes)
     }
-
-    /// 最终处理边界框 (合并、排序等)
-    fn finalize_boxes(&self, mut boxes: Vec<TextBox>) -> Vec<TextBox> {
-        // 应用 NMS
-        boxes = nms(&boxes, self.options.nms_threshold);
-
-        // 合并相邻框
-        if self.options.merge_boxes {
-            boxes = merge_adjacent_boxes(&boxes, self.options.merge_threshold);
-        }
-
-        // 按阅读顺序排序
-        sort_boxes_by_reading_order(&mut boxes);
-
-        boxes
-    }
 }
 
 /// 底层检测 API
@@ -538,26 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn test_det_options_balanced() {
-        let opts = DetOptions::balanced();
-        assert_eq!(opts.max_side_len, 1280);
-        assert_eq!(opts.precision_mode, DetPrecisionMode::Balanced);
-        assert_eq!(opts.multi_scales, vec![0.75, 1.0, 1.25]);
-    }
-
-    #[test]
-    fn test_det_options_high_precision() {
-        let opts = DetOptions::high_precision();
-        assert_eq!(opts.max_side_len, 1920);
-        assert_eq!(opts.precision_mode, DetPrecisionMode::HighPrecision);
-        assert_eq!(opts.multi_scales, vec![0.5, 0.75, 1.0, 1.25, 1.5]);
-        assert_eq!(opts.block_size, 640);
-        assert_eq!(opts.block_overlap, 100);
-        assert_eq!(opts.box_threshold, 0.4);
-        assert_eq!(opts.score_threshold, 0.25);
-    }
-
-    #[test]
     fn test_det_options_builder() {
         let opts = DetOptions::new()
             .with_max_side_len(1280)
@@ -567,7 +404,7 @@ mod tests {
             .with_box_border(10)
             .with_merge_boxes(true)
             .with_merge_threshold(20)
-            .with_precision_mode(DetPrecisionMode::Balanced)
+            .with_precision_mode(DetPrecisionMode::Fast)
             .with_multi_scales(vec![0.5, 1.0, 1.5])
             .with_block_size(800);
 
@@ -578,7 +415,7 @@ mod tests {
         assert_eq!(opts.box_border, 10);
         assert!(opts.merge_boxes);
         assert_eq!(opts.merge_threshold, 20);
-        assert_eq!(opts.precision_mode, DetPrecisionMode::Balanced);
+        assert_eq!(opts.precision_mode, DetPrecisionMode::Fast);
         assert_eq!(opts.multi_scales, vec![0.5, 1.0, 1.5]);
         assert_eq!(opts.block_size, 800);
     }
@@ -592,8 +429,6 @@ mod tests {
     #[test]
     fn test_det_precision_mode_equality() {
         assert_eq!(DetPrecisionMode::Fast, DetPrecisionMode::Fast);
-        assert_ne!(DetPrecisionMode::Fast, DetPrecisionMode::Balanced);
-        assert_ne!(DetPrecisionMode::Balanced, DetPrecisionMode::HighPrecision);
     }
 
     #[test]
@@ -616,15 +451,5 @@ mod tests {
         assert!(fast.box_threshold >= 0.0 && fast.box_threshold <= 1.0);
         assert!(fast.score_threshold >= 0.0 && fast.score_threshold <= 1.0);
         assert!(fast.nms_threshold >= 0.0 && fast.nms_threshold <= 1.0);
-
-        let balanced = DetOptions::balanced();
-        assert!(balanced.box_threshold >= 0.0 && balanced.box_threshold <= 1.0);
-        assert!(!balanced.multi_scales.is_empty());
-
-        let high = DetOptions::high_precision();
-        assert!(high.box_threshold >= 0.0 && high.box_threshold <= 1.0);
-        assert!(!high.multi_scales.is_empty());
-        assert!(high.block_size > 0);
-        assert!(high.block_overlap < high.block_size);
     }
 }

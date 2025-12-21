@@ -51,8 +51,12 @@ impl TextBox {
         let right = ((self.rect.left() as u32 + self.rect.width()) + border).min(max_width);
         let bottom = ((self.rect.top() as u32 + self.rect.height()) + border).min(max_height);
 
+        // 确保 right >= x 和 bottom >= y，避免减法溢出
+        let width = if right > x { right - x } else { 1 };
+        let height = if bottom > y { bottom - y } else { 1 };
+
         Self {
-            rect: Rect::at(x as i32, y as i32).of_size(right - x, bottom - y),
+            rect: Rect::at(x as i32, y as i32).of_size(width, height),
             score: self.score,
             points: self.points,
         }
@@ -156,6 +160,12 @@ pub fn extract_boxes_with_unclip(
     let mut boxes = Vec::new();
 
     for contour in contours {
+        // 只保留外部轮廓（没有父轮廓的），过滤掉内部/嵌套的轮廓
+        // 这可以避免产生重叠的检测框
+        if contour.parent.is_some() {
+            continue;
+        }
+
         if contour.points.len() < 4 {
             continue;
         }
@@ -235,9 +245,31 @@ fn get_contour_bounds(contour: &Contour<i32>) -> (i32, i32, i32, i32) {
     (min_x, min_y, max_x, max_y)
 }
 
+/// 计算一个框被另一个框包含的比例
+fn compute_containment_ratio(inner: &Rect, outer: &Rect) -> f32 {
+    let x1 = inner.left().max(outer.left());
+    let y1 = inner.top().max(outer.top());
+    let x2 = (inner.left() + inner.width() as i32).min(outer.left() + outer.width() as i32);
+    let y2 = (inner.top() + inner.height() as i32).min(outer.top() + outer.height() as i32);
+
+    if x2 <= x1 || y2 <= y1 {
+        return 0.0;
+    }
+
+    let intersection = (x2 - x1) as f32 * (y2 - y1) as f32;
+    let inner_area = inner.width() as f32 * inner.height() as f32;
+
+    if inner_area <= 0.0 {
+        0.0
+    } else {
+        intersection / inner_area
+    }
+}
+
 /// 非极大值抑制 (NMS)
 ///
 /// 过滤重叠的边界框，保留分数最高的
+/// 同时会过滤掉被其他框大面积包含的小框
 ///
 /// # 参数
 /// - `boxes`: 边界框列表
@@ -247,28 +279,57 @@ pub fn nms(boxes: &[TextBox], iou_threshold: f32) -> Vec<TextBox> {
         return Vec::new();
     }
 
-    // 使用索引排序而非克隆整个向量
+    // 按分数降序、面积降序排列（分数高且面积大的优先保留）
     let mut indices: Vec<usize> = (0..boxes.len()).collect();
-    indices.sort_by(|&a, &b| boxes[b].score.partial_cmp(&boxes[a].score).unwrap());
+    indices.sort_by(|&a, &b| {
+        // 首先按分数降序
+        let score_cmp = boxes[b]
+            .score
+            .partial_cmp(&boxes[a].score)
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if score_cmp != std::cmp::Ordering::Equal {
+            return score_cmp;
+        }
+        // 分数相同时按面积降序（优先保留大框）
+        boxes[b].area().cmp(&boxes[a].area())
+    });
 
     let mut keep = Vec::new();
     let mut suppressed = vec![false; boxes.len()];
 
-    for &i in &indices {
+    for (pos, &i) in indices.iter().enumerate() {
         if suppressed[i] {
             continue;
         }
 
         keep.push(boxes[i].clone());
 
-        for &j in &indices {
-            if j <= i || suppressed[j] {
+        // 检查后续所有框（分数更低或面积更小的框）
+        for &j in indices.iter().skip(pos + 1) {
+            if suppressed[j] {
                 continue;
             }
 
+            // 检查 IoU
             let iou = compute_iou(&boxes[i].rect, &boxes[j].rect);
             if iou > iou_threshold {
                 suppressed[j] = true;
+                continue;
+            }
+
+            // 检查包含关系：如果 j 被 i 大面积包含（>50%），则抑制 j
+            let containment_j_in_i = compute_containment_ratio(&boxes[j].rect, &boxes[i].rect);
+            if containment_j_in_i > 0.5 {
+                suppressed[j] = true;
+                continue;
+            }
+
+            // 检查反向包含：如果 i 被 j 大面积包含（>70%），
+            // 由于 i 优先被选中（分数更高或面积更大），抑制 j
+            let containment_i_in_j = compute_containment_ratio(&boxes[i].rect, &boxes[j].rect);
+            if containment_i_in_j > 0.7 {
+                suppressed[j] = true;
+                continue;
             }
         }
     }

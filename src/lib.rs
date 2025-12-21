@@ -8,8 +8,7 @@
 //!
 //! - **全新 API 设计**: 提供从底层模型到高层 Pipeline 的完整分层 API
 //! - **灵活的模型加载**: 支持从文件路径或内存字节加载模型
-//! - **可配置的检测参数**: 支持自定义检测阈值、分辨率、精度模式等
-//! - **三种精度模式**: 快速、平衡、高精度模式，满足不同场景需求
+//! - **可配置的检测参数**: 支持自定义检测阈值、分辨率等
 //! - **GPU 加速**: 支持 Metal、OpenCL、Vulkan 等多种 GPU 后端
 //! - **批量处理**: 支持批量文本识别以提高吞吐量
 //!
@@ -48,9 +47,9 @@
 //! use ocr_rs::{DetModel, RecModel, DetOptions, DetPrecisionMode};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // 创建检测模型 (高精度模式)
+//!     // 创建检测模型
 //!     let det = DetModel::from_file("models/det_model.mnn", None)?
-//!         .with_options(DetOptions::high_precision());
+//!         .with_options(DetOptions::fast());
 //!
 //!     // 创建识别模型
 //!     let rec = RecModel::from_file("models/rec_model.mnn", "models/ppocr_keys.txt", None)?;
@@ -70,23 +69,6 @@
 //!
 //!     Ok(())
 //! }
-//! ```
-//!
-//! ### 使用精度预设
-//!
-//! ```ignore
-//! use ocr_rs::{OcrEngine, OcrEngineConfig};
-//!
-//! // 快速模式 - 适合实时处理
-//! let config = OcrEngineConfig::fast();
-//!
-//! // 平衡模式 - 速度与精度的平衡
-//! let config = OcrEngineConfig::balanced();
-//!
-//! // 高精度模式 - 多尺度 + 分块检测
-//! let config = OcrEngineConfig::high_precision();
-//!
-//! let engine = OcrEngine::new(det_path, rec_path, charset_path, Some(config))?;
 //! ```
 //!
 //! ### GPU 加速

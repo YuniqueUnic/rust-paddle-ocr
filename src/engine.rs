@@ -50,6 +50,8 @@ pub struct OcrEngineConfig {
     pub rec_options: RecOptions,
     /// 是否启用并行识别（使用 rayon 对多个文本区域并行处理）
     pub enable_parallel: bool,
+    /// 结果级别的最小置信度阈值（低于此值的识别结果将被过滤）
+    pub min_result_confidence: f32,
 }
 
 impl Default for OcrEngineConfig {
@@ -60,7 +62,8 @@ impl Default for OcrEngineConfig {
             precision_mode: PrecisionMode::Normal,
             det_options: DetOptions::default(),
             rec_options: RecOptions::default(),
-            enable_parallel: false, // 默认禁用，避免与 MNN 线程池冲突
+            enable_parallel: true,
+            min_result_confidence: 0.5,
         }
     }
 }
@@ -110,29 +113,20 @@ impl OcrEngineConfig {
         self
     }
 
+    /// 设置结果级别的最小置信度阈值
+    ///
+    /// 低于此阈值的识别结果将被过滤掉。
+    /// 建议值：0.5 (宽松), 0.7 (平衡), 0.9 (严格)
+    pub fn with_min_result_confidence(mut self, threshold: f32) -> Self {
+        self.min_result_confidence = threshold;
+        self
+    }
+
     /// 快速模式预设
     pub fn fast() -> Self {
         Self {
             precision_mode: PrecisionMode::Low,
             det_options: DetOptions::fast(),
-            ..Default::default()
-        }
-    }
-
-    /// 平衡模式预设
-    pub fn balanced() -> Self {
-        Self {
-            det_options: DetOptions::balanced(),
-            ..Default::default()
-        }
-    }
-
-    /// 高精度模式预设
-    pub fn high_precision() -> Self {
-        Self {
-            precision_mode: PrecisionMode::High,
-            det_options: DetOptions::high_precision(),
-            rec_options: RecOptions::new().with_min_score(0.4),
             ..Default::default()
         }
     }
@@ -323,11 +317,13 @@ impl OcrEngine {
             self.rec_model.recognize_batch_ref(&images)?
         };
 
-        // 3. 组合结果
+        // 3. 组合结果并过滤低置信度
         let results: Vec<OcrResult_> = rec_results
             .into_iter()
             .zip(boxes)
-            .filter(|(rec, _)| !rec.text.is_empty())
+            .filter(|(rec, _)| {
+                !rec.text.is_empty() && rec.confidence >= self.config.min_result_confidence
+            })
             .map(|(rec, bbox)| OcrResult_::new(rec.text, rec.confidence, bbox))
             .collect();
 
@@ -449,9 +445,6 @@ mod tests {
 
         let config = OcrEngineConfig::fast();
         assert_eq!(config.precision_mode, PrecisionMode::Low);
-
-        let config = OcrEngineConfig::high_precision();
-        assert_eq!(config.precision_mode, PrecisionMode::High);
     }
 
     #[test]

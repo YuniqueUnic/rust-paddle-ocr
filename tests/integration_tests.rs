@@ -48,7 +48,7 @@ fn test_det_model_with_options() {
         d.with_options(
             DetOptions::new()
                 .with_max_side_len(1280)
-                .with_precision_mode(DetPrecisionMode::Balanced),
+                .with_precision_mode(DetPrecisionMode::Fast),
         )
     });
 
@@ -140,26 +140,6 @@ fn test_ocr_engine_presets() {
         Some(fast_config),
     );
     assert!(engine.is_ok(), "快速模式创建失败");
-
-    // 测试平衡模式
-    let balanced_config = OcrEngineConfig::balanced();
-    let engine = OcrEngine::new(
-        DET_MODEL_PATH,
-        REC_MODEL_PATH,
-        CHARSET_PATH,
-        Some(balanced_config),
-    );
-    assert!(engine.is_ok(), "平衡模式创建失败");
-
-    // 测试高精度模式
-    let high_config = OcrEngineConfig::high_precision();
-    let engine = OcrEngine::new(
-        DET_MODEL_PATH,
-        REC_MODEL_PATH,
-        CHARSET_PATH,
-        Some(high_config),
-    );
-    assert!(engine.is_ok(), "高精度模式创建失败");
 }
 
 #[test]
