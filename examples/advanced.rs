@@ -4,7 +4,7 @@
 //!
 //! 展示如何使用底层 API 进行更精细的控制
 
-use rust_paddle_ocr::{
+use ocr_rs::{
     DetModel, DetOptions, DetPrecisionMode, InferenceConfig, PrecisionMode, RecModel, RecOptions,
 };
 use std::env;

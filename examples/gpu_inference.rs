@@ -4,7 +4,7 @@
 //!
 //! 展示如何配置和使用 GPU 加速
 
-use rust_paddle_ocr::{Backend, DetOptions, OcrEngine, OcrEngineConfig};
+use ocr_rs::{Backend, DetOptions, OcrEngine, OcrEngineConfig};
 use std::env;
 use std::error::Error;
 use std::time::Instant;

@@ -1,8 +1,8 @@
 //! 调试识别模型输出
 
 use image::GenericImageView;
-use rust_paddle_ocr::mnn::{InferenceConfig, InferenceEngine};
-use rust_paddle_ocr::preprocess::{preprocess_for_rec, NormalizeParams};
+use ocr_rs::mnn::{InferenceConfig, InferenceEngine};
+use ocr_rs::preprocess::{preprocess_for_rec, NormalizeParams};
 use std::env;
 use std::fs;
 

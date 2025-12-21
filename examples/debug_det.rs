@@ -1,9 +1,9 @@
 //! 调试检测模型输出
 
 use image::GenericImageView;
-use rust_paddle_ocr::mnn::{InferenceConfig, InferenceEngine};
-use rust_paddle_ocr::postprocess::extract_boxes_from_mask_with_padding;
-use rust_paddle_ocr::preprocess::{preprocess_for_det, NormalizeParams};
+use ocr_rs::mnn::{InferenceConfig, InferenceEngine};
+use ocr_rs::postprocess::extract_boxes_from_mask_with_padding;
+use ocr_rs::preprocess::{preprocess_for_det, NormalizeParams};
 use std::env;
 
 fn main() {

@@ -4,7 +4,7 @@
 //!
 //! 这些测试需要模型文件才能运行
 
-use rust_paddle_ocr::{
+use ocr_rs::{
     DetModel, DetOptions, DetPrecisionMode, OcrEngine, OcrEngineConfig, RecModel, RecOptions,
 };
 

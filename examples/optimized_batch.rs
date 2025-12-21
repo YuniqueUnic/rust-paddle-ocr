@@ -5,7 +5,7 @@
 //! 2. 减少内存克隆
 //! 3. 并行处理支持
 
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+use ocr_rs::{OcrEngine, OcrEngineConfig};
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -5,7 +5,7 @@ use imageproc::drawing::draw_hollow_rect_mut;
 use imageproc::rect::Rect;
 use std::env;
 
-use rust_paddle_ocr::{DetOptions, OcrEngine, OcrEngineConfig};
+use ocr_rs::{DetOptions, OcrEngine, OcrEngineConfig};
 
 fn main() {
     let args: Vec<String> = env::args().collect();

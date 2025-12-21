@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use image::DynamicImage;
-use rust_paddle_ocr::{DetModel, DetOptions, DetPrecisionMode, RecModel, RecOptions};
+use ocr_rs::{DetModel, DetOptions, DetPrecisionMode, RecModel, RecOptions};
 use std::time::Duration;
 
 fn setup() -> (DetModel, RecModel, DynamicImage) {
