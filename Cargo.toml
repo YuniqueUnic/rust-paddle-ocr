@@ -24,6 +24,7 @@ exclude = [
     "*.jpg",
     "res/*",
     "3rd_party/*",
+    "models/*",
 ]
 
 [features]
