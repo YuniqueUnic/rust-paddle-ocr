@@ -1,5 +1,5 @@
 [package]
-name = "rust-paddle-ocr"
+name = "ocr-rs"
 version = "2.0.0"
 edition = "2021"
 authors = ["ChenZibo <qw.54@163.com>"]
@@ -16,7 +16,6 @@ keywords = [
 ]
 categories = ["computer-vision", "text-processing", "multimedia"]
 documentation = "https://docs.rs/rust-paddle-ocr"
-homepage = "https://github.com/zibo-chen/rust-paddle-ocr"
 exclude = [
     "assets/*",
     "tests/*",
@@ -24,7 +23,7 @@ exclude = [
     "*.png",
     "*.jpg",
     "res/*",
-    "MNN/*",
+    "3rd_party/*",
 ]
 
 [features]
