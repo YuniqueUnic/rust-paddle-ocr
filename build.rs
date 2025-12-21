@@ -147,11 +147,11 @@ fn build_mnn_with_cmake(
         config.define("CMAKE_BUILD_TYPE", "Release");
         // Check if we're using static CRT
         if env::var("CARGO_CFG_TARGET_FEATURE").map_or(false, |f| f.contains("crt-static")) {
-            // Force static CRT linking using multiple approaches
-            config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
+            // MNN has a specific option for static CRT on Windows
+            config.define("MNN_WIN_RUNTIME_MT", "ON");
 
-            // Set compiler flags directly to override any defaults
-            // Replace /MD with /MT in the flags
+            // Also set these for extra safety
+            config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
             config.define("CMAKE_C_FLAGS_RELEASE", "/MT /O2 /Ob2 /DNDEBUG");
             config.define("CMAKE_CXX_FLAGS_RELEASE", "/MT /O2 /Ob2 /DNDEBUG");
             config.define("CMAKE_C_FLAGS", "/MT");
