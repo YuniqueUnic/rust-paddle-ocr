@@ -18,7 +18,7 @@
 //! ### 简单用法 - 使用高级 API (推荐)
 //!
 //! ```ignore
-//! use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+//! use ocr_rs::{OcrEngine, OcrEngineConfig};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // 创建 OCR 引擎
@@ -45,7 +45,7 @@
 //! ### 高级用法 - 使用底层 API
 //!
 //! ```ignore
-//! use rust_paddle_ocr::{DetModel, RecModel, DetOptions, DetPrecisionMode};
+//! use ocr_rs::{DetModel, RecModel, DetOptions, DetPrecisionMode};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // 创建检测模型 (高精度模式)
@@ -75,7 +75,7 @@
 //! ### 使用精度预设
 //!
 //! ```ignore
-//! use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+//! use ocr_rs::{OcrEngine, OcrEngineConfig};
 //!
 //! // 快速模式 - 适合实时处理
 //! let config = OcrEngineConfig::fast();
@@ -92,7 +92,7 @@
 //! ### GPU 加速
 //!
 //! ```ignore
-//! use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, Backend};
+//! use ocr_rs::{OcrEngine, OcrEngineConfig, Backend};
 //!
 //! let config = OcrEngineConfig::new()
 //!     .with_backend(Backend::Metal);  // macOS/iOS

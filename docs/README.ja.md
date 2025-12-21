@@ -279,7 +279,7 @@ branch = "main"
 `OcrEngine` を使用して完全なOCRフローを実行します。1回の呼び出しで検出と認識が完了します：
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // OCRエンジンの作成（デフォルト設定を使用）
@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `OcrEngine` を使用しますが、検出と認識を別々に呼び出します。中間にカスタム処理を挿入する場合に適しています：
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
@@ -350,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 検出エンジンと認識エンジンを別々に作成するか、単機能エンジンのみを作成します：
 
 ```rust
-use rust_paddle_ocr::{DetModel, RecModel, DetOptions, RecOptions};
+use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 方法A: 検出モデルと認識モデルを別々に作成
@@ -395,7 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 基本設定オプション
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 精度プリセットを使用
@@ -420,7 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### GPU アクセラレーション
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, Backend};
+use ocr_rs::{OcrEngine, OcrEngineConfig, Backend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // GPUアクセラレーションを使用
@@ -438,7 +438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 検出と認識のカスタムパラメータ
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
+use ocr_rs::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // カスタム設定
@@ -465,7 +465,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 特定言語モデルの使用
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 韓国語モデルの使用
@@ -492,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 組み込みデプロイやモデル暗号化が必要なシーンに適しています：
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ファイル（または他のソース）からモデルのバイトデータを読み込む
@@ -518,7 +518,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 便利な関数
 
 ```rust
-use rust_paddle_ocr::ocr_file;
+use ocr_rs::ocr_file;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1行のコードでOCRを実行

@@ -279,7 +279,7 @@ This library provides a **Layered Inference API**, allowing you to choose the us
 Use `OcrEngine` to complete the full OCR process with a single call:
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create OCR engine (using default config)
@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use `OcrEngine` but call detection and recognition separately. Useful for inserting custom processing:
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
@@ -350,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Create detection and recognition engines separately, or create a single-function engine:
 
 ```rust
-use rust_paddle_ocr::{DetModel, RecModel, DetOptions, RecOptions};
+use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Method A: Create detection and recognition models separately
@@ -395,7 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Basic Configuration Options
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use precision presets
@@ -420,7 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### GPU Acceleration
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, Backend};
+use ocr_rs::{OcrEngine, OcrEngineConfig, Backend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use GPU acceleration
@@ -438,7 +438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Custom Detection and Recognition Parameters
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
+use ocr_rs::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Custom configuration
@@ -465,7 +465,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Using Specific Language Models
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use Korean model
@@ -492,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Suitable for embedded deployment or scenarios requiring model encryption:
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read model bytes from file (or other sources)
@@ -518,7 +518,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Convenience Functions
 
 ```rust
-use rust_paddle_ocr::ocr_file;
+use ocr_rs::ocr_file;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Perform OCR in one line of code

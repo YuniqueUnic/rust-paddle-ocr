@@ -281,7 +281,7 @@ branch = "main"
 使用 `OcrEngine` 完成完整的 OCR 流程，一次调用完成检测和识别：
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 创建 OCR 引擎（使用默认配置）
@@ -314,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 使用 `OcrEngine` 但分别调用检测和识别，适合需要在中间插入自定义处理的场景：
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
@@ -352,7 +352,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 分别创建检测和识别引擎，或只创建单一功能引擎：
 
 ```rust
-use rust_paddle_ocr::{DetModel, RecModel, DetOptions, RecOptions};
+use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 方式A: 分别创建检测和识别模型
@@ -397,7 +397,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 基本配置选项
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 使用精度预设
@@ -422,7 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### GPU 加速
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, Backend};
+use ocr_rs::{OcrEngine, OcrEngineConfig, Backend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 使用 GPU 加速
@@ -440,7 +440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 自定义检测和识别参数
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
+use ocr_rs::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 自定义配置
@@ -467,7 +467,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 使用特定语言模型
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 使用韩语模型
@@ -494,7 +494,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 适用于嵌入式部署或需要加密模型的场景：
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 从文件读取模型字节
@@ -520,7 +520,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 便捷函数
 
 ```rust
-use rust_paddle_ocr::ocr_file;
+use ocr_rs::ocr_file;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 一行代码完成 OCR

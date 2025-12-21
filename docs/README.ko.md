@@ -279,7 +279,7 @@ branch = "main"
 `OcrEngine`을 사용하여 전체 OCR 프로세스를 수행합니다. 한 번의 호출로 검출과 인식을 완료합니다:
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // OCR 엔진 생성 (기본 설정 사용)
@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `OcrEngine`을 사용하지만 검출과 인식을 별도로 호출합니다. 중간에 사용자 정의 처리를 삽입해야 하는 경우에 적합합니다:
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
@@ -350,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 검출 엔진과 인식 엔진을 별도로 생성하거나 단일 기능 엔진만 생성합니다:
 
 ```rust
-use rust_paddle_ocr::{DetModel, RecModel, DetOptions, RecOptions};
+use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 방식 A: 검출 및 인식 모델을 별도로 생성
@@ -395,7 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 기본 설정 옵션
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 정밀도 프리셋 사용
@@ -420,7 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### GPU 가속
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, Backend};
+use ocr_rs::{OcrEngine, OcrEngineConfig, Backend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // GPU 가속 사용
@@ -438,7 +438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 검출 및 인식 매개변수 사용자 정의
 
 ```rust
-use rust_paddle_ocr::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
+use ocr_rs::{OcrEngine, OcrEngineConfig, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 사용자 정의 설정
@@ -465,7 +465,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 특정 언어 모델 사용
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 한국어 모델 사용
@@ -492,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 임베디드 배포 또는 모델 암호화가 필요한 시나리오에 적합합니다:
 
 ```rust
-use rust_paddle_ocr::OcrEngine;
+use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 파일(또는 다른 소스)에서 모델 바이트 데이터 읽기
@@ -518,7 +518,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 편리한 함수
 
 ```rust
-use rust_paddle_ocr::ocr_file;
+use ocr_rs::ocr_file;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 한 줄의 코드로 OCR 수행

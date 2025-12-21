@@ -172,7 +172,7 @@ impl OcrEngineConfig {
 /// # 示例
 ///
 /// ```ignore
-/// use rust_paddle_ocr::{OcrEngine, OcrEngineConfig};
+/// use ocr_rs::{OcrEngine, OcrEngineConfig};
 ///
 /// // 创建引擎
 /// let engine = OcrEngine::new(
@@ -419,7 +419,7 @@ impl RecOnlyEngine {
 /// # 示例
 ///
 /// ```ignore
-/// let results = rust_paddle_ocr::ocr_file(
+/// let results = ocr_rs::ocr_file(
 ///     "test.jpg",
 ///     "det_model.mnn",
 ///     "rec_model.mnn",
