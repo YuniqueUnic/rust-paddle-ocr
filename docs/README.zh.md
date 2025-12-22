@@ -15,7 +15,6 @@
 - 🎯 **全新分层 API 设计**：提供从底层模型到高层 Pipeline 的完整分层 API
 - 🔧 **灵活的模型加载**：支持从文件路径或内存字节加载模型
 - ⚙️ **可配置的检测参数**：支持自定义检测阈值、分辨率、精度模式等
-- 🎚️ **三种精度预设**：快速、平衡、高精度模式，满足不同场景需求
 - 🚀 **GPU 加速支持**：支持 Metal、OpenCL、Vulkan 等多种 GPU 后端
 - 📦 **批量处理优化**：支持批量文本识别以提高吞吐量
 - 🔌 **独立引擎模式**：可以只创建检测引擎或识别引擎
@@ -38,7 +37,6 @@
 - **高性能推理**：基于 MNN 推理框架，速度快、内存占用低
 - **GPU 加速**：支持 Metal、OpenCL、Vulkan 等多种 GPU 后端
 - **批量处理**：支持批量文本识别，提高吞吐量
-- **精度预设**：提供快速、平衡、高精度三种模式，满足不同场景需求
 
 ### 开发体验
 - **灵活配置**：检测阈值、分辨率、精度模式等参数均可自定义
@@ -200,8 +198,7 @@ let text = rec_engine.recognize_text(&text_line_image)?;
 - 性能优化（如复用检测结果）
 
 ```rust
-let det_model = DetModel::from_file("models/det_model.mnn", None)?
-    .with_options(DetOptions::high_precision());
+let det_model = DetModel::from_file("models/det_model.mnn", None)?;
     
 let rec_model = RecModel::from_file(
     "models/rec_model.mnn",
@@ -356,8 +353,7 @@ use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 方式A: 分别创建检测和识别模型
-    let det_model = DetModel::from_file("models/det_model.mnn", None)?
-        .with_options(DetOptions::high_precision());
+    let det_model = DetModel::from_file("models/det_model.mnn", None)?;
     
     let rec_model = RecModel::from_file(
         "models/rec_model.mnn",
@@ -400,10 +396,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 使用精度预设
-    let config = OcrEngineConfig::fast();        // 快速模式
-    // let config = OcrEngineConfig::balanced();    // 平衡模式（默认）
-    // let config = OcrEngineConfig::high_precision(); // 高精度模式
+    // 使用快速模式配置
+    let config = OcrEngineConfig::fast();
     
     let engine = OcrEngine::new(
         "models/PP-OCRv5_mobile_det.mnn",
@@ -553,12 +547,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 // 实时处理场景
 let config = OcrEngineConfig::fast();
-
-// 一般文档识别
-let config = OcrEngineConfig::balanced();
-
-// 高质量要求的场景
-let config = OcrEngineConfig::high_precision();
 ```
 
 ### 2. 使用 GPU 加速

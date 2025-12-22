@@ -15,7 +15,6 @@ A lightweight and efficient OCR (Optical Character Recognition) Rust library bas
 - 🎯 **New Layered API Design**: Provides a complete layered API ranging from low-level models to high-level Pipelines.
 - 🔧 **Flexible Model Loading**: Supports loading models from file paths or memory bytes.
 - ⚙️ **Configurable Detection Parameters**: Supports custom detection thresholds, resolution, precision modes, and more.
-- 🎚️ **Three Precision Presets**: Fast, Balanced, and High-Precision modes to meet different scenario requirements.
 - 🚀 **GPU Acceleration Support**: Supports multiple GPU backends including Metal, OpenCL, and Vulkan.
 - 📦 **Batch Processing Optimization**: Supports batch text recognition to improve throughput.
 - 🔌 **Independent Engine Mode**: Ability to create standalone detection engines or recognition engines.
@@ -38,7 +37,6 @@ A lightweight and efficient OCR (Optical Character Recognition) Rust library bas
 - **High-Performance Inference**: Based on the MNN inference framework for fast speed and low memory usage.
 - **GPU Acceleration**: Supports Metal, OpenCL, Vulkan, and other GPU backends.
 - **Batch Processing**: Supports batch text recognition to boost throughput.
-- **Precision Presets**: Provides Fast, Balanced, and High-Precision modes.
 
 ### Developer Experience
 - **Flexible Configuration**: Parameters such as detection thresholds, resolution, and precision modes are customizable.
@@ -200,8 +198,7 @@ Suitable for:
 - Performance optimization (e.g., reusing detection results).
 
 ```rust
-let det_model = DetModel::from_file("models/det_model.mnn", None)?
-    .with_options(DetOptions::high_precision());
+let det_model = DetModel::from_file("models/det_model.mnn", None)?;
     
 let rec_model = RecModel::from_file(
     "models/rec_model.mnn",
@@ -354,8 +351,7 @@ use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Method A: Create detection and recognition models separately
-    let det_model = DetModel::from_file("models/det_model.mnn", None)?
-        .with_options(DetOptions::high_precision());
+    let det_model = DetModel::from_file("models/det_model.mnn", None)?;
     
     let rec_model = RecModel::from_file(
         "models/rec_model.mnn",
@@ -398,10 +394,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Use precision presets
-    let config = OcrEngineConfig::fast();        // Fast mode
-    // let config = OcrEngineConfig::balanced();    // Balanced mode (Default)
-    // let config = OcrEngineConfig::high_precision(); // High precision mode
+    // Use fast mode configuration
+    let config = OcrEngineConfig::fast();
     
     let engine = OcrEngine::new(
         "models/PP-OCRv5_mobile_det.mnn",
@@ -551,12 +545,6 @@ For more complete examples, please refer to the [examples](../examples) director
 ```rust
 // Real-time processing
 let config = OcrEngineConfig::fast();
-
-// General document recognition
-let config = OcrEngineConfig::balanced();
-
-// High quality requirements
-let config = OcrEngineConfig::high_precision();
 ```
 
 ### 2. Use GPU Acceleration

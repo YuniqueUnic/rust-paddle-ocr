@@ -65,7 +65,7 @@ pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> DynamicImage
     let new_w = (w as f64 * scale).round() as u32;
     let new_h = (h as f64 * scale).round() as u32;
 
-    img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3)
+    fast_resize(img, new_w, new_h)
 }
 
 /// 将图像缩放到指定高度 (用于识别模型)
@@ -81,7 +81,37 @@ pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> DynamicImage 
     let scale = target_height as f64 / h as f64;
     let new_w = (w as f64 * scale).round() as u32;
 
-    img.resize_exact(new_w, target_height, image::imageops::FilterType::Lanczos3)
+    fast_resize(img, new_w, target_height)
+}
+
+/// 使用 fast_image_resize 进行快速图像缩放
+/// 启用 "image" feature 后可以直接传入 DynamicImage
+fn fast_resize(img: &DynamicImage, new_w: u32, new_h: u32) -> DynamicImage {
+    use fast_image_resize::{images::Image, IntoImageView, PixelType, Resizer};
+
+    // 获取源图像的像素类型
+    let pixel_type = img.pixel_type().unwrap_or(PixelType::U8x3);
+
+    // 创建目标图像容器
+    let mut dst_image = Image::new(new_w, new_h, pixel_type);
+
+    // 使用 Resizer 进行缩放（直接传入 DynamicImage，无需手动转换）
+    let mut resizer = Resizer::new();
+    resizer.resize(img, &mut dst_image, None).unwrap();
+
+    // 将结果转回 DynamicImage
+    match pixel_type {
+        PixelType::U8x3 => {
+            DynamicImage::ImageRgb8(RgbImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap())
+        }
+        PixelType::U8x4 => DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap(),
+        ),
+        _ => {
+            // 其他类型转为 RGB
+            DynamicImage::ImageRgb8(RgbImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap())
+        }
+    }
 }
 
 /// 将图像转换为检测模型的输入张量

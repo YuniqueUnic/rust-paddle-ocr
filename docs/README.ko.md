@@ -15,7 +15,6 @@ PaddleOCR 모델을 기반으로 한 경량 고효율 OCR(광학 문자 인식) 
 - 🎯 **새로운 계층형 API 설계**: 저수준 모델부터 고수준 파이프라인까지 완전한 계층형 API 제공
 - 🔧 **유연한 모델 로딩**: 파일 경로 또는 메모리 바이트에서 모델 로딩 지원
 - ⚙️ **설정 가능한 검출 매개변수**: 검출 임계값, 해상도, 정밀도 모드 등 사용자 정의 지원
-- 🎚️ **3가지 정밀도 프리셋**: 다양한 시나리오 요구 사항을 충족하는 고속(Fast), 균형(Balanced), 고정밀(High Precision) 모드 제공
 - 🚀 **GPU 가속 지원**: Metal, OpenCL, Vulkan 등 다양한 GPU 백엔드 지원
 - 📦 **배치 처리 최적화**: 처리량을 높이기 위한 텍스트 인식 배치 처리 지원
 - 🔌 **독립 엔진 모드**: 검출 엔진 또는 인식 엔진만 별도로 생성 가능
@@ -38,7 +37,6 @@ PaddleOCR 모델을 기반으로 한 경량 고효율 OCR(광학 문자 인식) 
 - **고성능 추론**: MNN 추론 프레임워크 기반으로 속도가 빠르고 메모리 점유율이 낮음
 - **GPU 가속**: Metal, OpenCL, Vulkan 등 다양한 GPU 백엔드 지원
 - **배치 처리**: 텍스트 인식 배치 처리를 지원하여 처리량 향상
-- **정밀도 프리셋**: 고속, 균형, 고정밀 세 가지 모드를 제공하여 다양한 시나리오 충족
 
 ### 개발 경험
 - **유연한 설정**: 검출 임계값, 해상도, 정밀도 모드 등의 매개변수 사용자 정의 가능
@@ -200,8 +198,7 @@ let text = rec_engine.recognize_text(&text_line_image)?;
 - 성능 최적화 (예: 검출 결과 재사용)
 
 ```rust
-let det_model = DetModel::from_file("models/det_model.mnn", None)?
-    .with_options(DetOptions::high_precision());
+let det_model = DetModel::from_file("models/det_model.mnn", None)?;
     
 let rec_model = RecModel::from_file(
     "models/rec_model.mnn",
@@ -354,8 +351,7 @@ use ocr_rs::{DetModel, RecModel, DetOptions, RecOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 방식 A: 검출 및 인식 모델을 별도로 생성
-    let det_model = DetModel::from_file("models/det_model.mnn", None)?
-        .with_options(DetOptions::high_precision());
+    let det_model = DetModel::from_file("models/det_model.mnn", None)?;
     
     let rec_model = RecModel::from_file(
         "models/rec_model.mnn",
@@ -398,10 +394,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use ocr_rs::{OcrEngine, OcrEngineConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 정밀도 프리셋 사용
-    let config = OcrEngineConfig::fast();        // 고속 모드
-    // let config = OcrEngineConfig::balanced();    // 균형 모드 (기본값)
-    // let config = OcrEngineConfig::high_precision(); // 고정밀 모드
+    // 고속 모드 설정 사용
+    let config = OcrEngineConfig::fast();
     
     let engine = OcrEngine::new(
         "models/PP-OCRv5_mobile_det.mnn",
@@ -551,12 +545,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 // 실시간 처리 시나리오
 let config = OcrEngineConfig::fast();
-
-// 일반 문서 인식
-let config = OcrEngineConfig::balanced();
-
-// 고품질이 요구되는 시나리오
-let config = OcrEngineConfig::high_precision();
 ```
 
 ### 2. GPU 가속 사용
