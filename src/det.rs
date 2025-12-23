@@ -1,8 +1,6 @@
-//! 文本检测模型
-//!
 //! Text Detection Model
 //!
-//! 提供基于 PaddleOCR 检测模型的文本区域检测功能
+//! Provides text region detection functionality based on PaddleOCR detection models
 
 use image::{DynamicImage, GenericImageView};
 use ndarray::ArrayD;
@@ -13,42 +11,42 @@ use crate::mnn::{InferenceConfig, InferenceEngine};
 use crate::postprocess::{extract_boxes_with_unclip, TextBox};
 use crate::preprocess::{preprocess_for_det, NormalizeParams};
 
-/// 检测精度模式
+/// Detection precision mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetPrecisionMode {
-    /// 快速模式 - 单次检测
+    /// Fast mode - single detection
     #[default]
     Fast,
 }
 
-/// 检测选项
+/// Detection options
 #[derive(Debug, Clone)]
 pub struct DetOptions {
-    /// 图片最大边长限制 (超过会缩放)
+    /// Maximum image side length limit (will be scaled if exceeded)
     pub max_side_len: u32,
-    /// 边界框二值化阈值 (0.0 - 1.0)
+    /// Bounding box binarization threshold (0.0 - 1.0)
     pub box_threshold: f32,
-    /// 文本框扩展比例
+    /// Text box expansion ratio
     pub unclip_ratio: f32,
-    /// 像素级分割阈值
+    /// Pixel-level segmentation threshold
     pub score_threshold: f32,
-    /// 最小边界框面积
+    /// Minimum bounding box area
     pub min_area: u32,
-    /// 边界框边距扩展
+    /// Bounding box border expansion
     pub box_border: u32,
-    /// 是否合并相邻文本框
+    /// Whether to merge adjacent text boxes
     pub merge_boxes: bool,
-    /// 合并距离阈值
+    /// Merge distance threshold
     pub merge_threshold: i32,
-    /// 精度模式
+    /// Precision mode
     pub precision_mode: DetPrecisionMode,
-    /// 多尺度检测的缩放比例列表 (仅高精度模式)
+    /// Scale ratios for multi-scale detection (high precision mode only)
     pub multi_scales: Vec<f32>,
-    /// 分块检测的块大小 (仅高精度模式)
+    /// Block size for block detection (high precision mode only)
     pub block_size: u32,
-    /// 分块检测的重叠区域
+    /// Overlap area for block detection
     pub block_overlap: u32,
-    /// NMS IoU 阈值
+    /// NMS IoU threshold
     pub nms_threshold: f32,
 }
 
@@ -73,72 +71,72 @@ impl Default for DetOptions {
 }
 
 impl DetOptions {
-    /// 创建新的检测选项
+    /// Create new detection options
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 设置最大边长
+    /// Set maximum side length
     pub fn with_max_side_len(mut self, len: u32) -> Self {
         self.max_side_len = len;
         self
     }
 
-    /// 设置边界框阈值
+    /// Set bounding box threshold
     pub fn with_box_threshold(mut self, threshold: f32) -> Self {
         self.box_threshold = threshold;
         self
     }
 
-    /// 设置分割阈值
+    /// Set segmentation threshold
     pub fn with_score_threshold(mut self, threshold: f32) -> Self {
         self.score_threshold = threshold;
         self
     }
 
-    /// 设置最小面积
+    /// Set minimum area
     pub fn with_min_area(mut self, area: u32) -> Self {
         self.min_area = area;
         self
     }
 
-    /// 设置边框扩展
+    /// Set box border expansion
     pub fn with_box_border(mut self, border: u32) -> Self {
         self.box_border = border;
         self
     }
 
-    /// 启用框合并
+    /// Enable box merging
     pub fn with_merge_boxes(mut self, merge: bool) -> Self {
         self.merge_boxes = merge;
         self
     }
 
-    /// 设置合并阈值
+    /// Set merge threshold
     pub fn with_merge_threshold(mut self, threshold: i32) -> Self {
         self.merge_threshold = threshold;
         self
     }
 
-    /// 设置精度模式
+    /// Set precision mode
     pub fn with_precision_mode(mut self, mode: DetPrecisionMode) -> Self {
         self.precision_mode = mode;
         self
     }
 
-    /// 设置多尺度比例
+    /// Set multi-scale ratios
     pub fn with_multi_scales(mut self, scales: Vec<f32>) -> Self {
         self.multi_scales = scales;
         self
     }
 
-    /// 设置分块大小
+    /// Set block size
     pub fn with_block_size(mut self, size: u32) -> Self {
         self.block_size = size;
         self
     }
 
-    /// 快速模式预设
+    /// Fast mode preset
     pub fn fast() -> Self {
         Self {
             max_side_len: 960,
@@ -148,7 +146,7 @@ impl DetOptions {
     }
 }
 
-/// 文本检测模型
+/// Text detection model
 pub struct DetModel {
     engine: InferenceEngine,
     options: DetOptions,
@@ -156,11 +154,11 @@ pub struct DetModel {
 }
 
 impl DetModel {
-    /// 从模型文件创建检测器
+    /// Create detector from model file
     ///
-    /// # 参数
-    /// - `model_path`: 模型文件路径 (.mnn 格式)
-    /// - `config`: 可选的推理配置
+    /// # Parameters
+    /// - `model_path`: Model file path (.mnn format)
+    /// - `config`: Optional inference config
     pub fn from_file(
         model_path: impl AsRef<Path>,
         config: Option<InferenceConfig>,
@@ -173,7 +171,7 @@ impl DetModel {
         })
     }
 
-    /// 从模型字节创建检测器
+    /// Create detector from model bytes
     pub fn from_bytes(model_bytes: &[u8], config: Option<InferenceConfig>) -> OcrResult<Self> {
         let engine = InferenceEngine::from_buffer(model_bytes, config)?;
         Ok(Self {
@@ -183,40 +181,40 @@ impl DetModel {
         })
     }
 
-    /// 设置检测选项
+    /// Set detection options
     pub fn with_options(mut self, options: DetOptions) -> Self {
         self.options = options;
         self
     }
 
-    /// 获取当前检测选项
+    /// Get current detection options
     pub fn options(&self) -> &DetOptions {
         &self.options
     }
 
-    /// 修改检测选项
+    /// Modify detection options
     pub fn options_mut(&mut self) -> &mut DetOptions {
         &mut self.options
     }
 
-    /// 检测图像中的文本区域
+    /// Detect text regions in image
     ///
-    /// # 参数
-    /// - `image`: 输入图像
+    /// # Parameters
+    /// - `image`: Input image
     ///
-    /// # 返回
-    /// 检测到的文本边界框列表
+    /// # Returns
+    /// List of detected text bounding boxes
     pub fn detect(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
         self.detect_fast(image)
     }
 
-    /// 检测并返回裁剪后的文本图像
+    /// Detect and return cropped text images
     ///
-    /// # 参数
-    /// - `image`: 输入图像
+    /// # Parameters
+    /// - `image`: Input image
     ///
-    /// # 返回
-    /// (文本图像, 对应的边界框) 列表
+    /// # Returns
+    /// List of (text image, corresponding bounding box)
     pub fn detect_and_crop(&self, image: &DynamicImage) -> OcrResult<Vec<(DynamicImage, TextBox)>> {
         let boxes = self.detect(image)?;
         let (width, height) = image.dimensions();
@@ -224,10 +222,10 @@ impl DetModel {
         let mut results = Vec::with_capacity(boxes.len());
 
         for text_box in boxes {
-            // 扩展边界框
+            // Expand bounding box
             let expanded = text_box.expand(self.options.box_border, width, height);
 
-            // 裁剪图像
+            // Crop image
             let cropped = image.crop_imm(
                 expanded.rect.left() as u32,
                 expanded.rect.top() as u32,
@@ -241,21 +239,21 @@ impl DetModel {
         Ok(results)
     }
 
-    /// 快速检测 (单次推理)
+    /// Fast detection (single inference)
     fn detect_fast(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
         let (original_width, original_height) = image.dimensions();
 
-        // 缩放图像
+        // Scale image
         let scaled = self.scale_image(image);
         let (scaled_width, scaled_height) = scaled.dimensions();
 
-        // 预处理
+        // Preprocess
         let input = preprocess_for_det(&scaled, &self.normalize_params);
 
-        // 推理 (使用动态形状)
+        // Inference (using dynamic shape)
         let output = self.engine.run_dynamic(input.view().into_dyn())?;
 
-        // 后处理 - 输出形状与输入相同（包括 padding）
+        // Post-processing - output shape matches input (including padding)
         let output_shape = output.shape();
         let out_w = output_shape[3] as u32;
         let out_h = output_shape[2] as u32;
@@ -273,8 +271,8 @@ impl DetModel {
         Ok(boxes)
     }
 
-    /// 平衡模式检测 (多尺度)
-    /// 缩放图像到最大边长限制
+    /// Balanced mode detection (multi-scale)
+    /// Scale image to maximum side length limit
     fn scale_image(&self, image: &DynamicImage) -> DynamicImage {
         let (w, h) = image.dimensions();
         let max_dim = w.max(h);
@@ -290,7 +288,7 @@ impl DetModel {
         image.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3)
     }
 
-    /// 后处理推理输出
+    /// Post-process inference output
     fn postprocess_output(
         &self,
         output: &ArrayD<f32>,
@@ -301,18 +299,18 @@ impl DetModel {
         original_width: u32,
         original_height: u32,
     ) -> OcrResult<Vec<TextBox>> {
-        // 获取输出数据
+        // Retrieve output data
         let output_shape = output.shape();
         if output_shape.len() < 3 {
             return Err(OcrError::PostprocessError(
-                "检测模型输出形状无效".to_string(),
+                "Detection model output shape invalid".to_string(),
             ));
         }
 
-        // 提取分割掩码（只取有效区域，去掉 padding）
+        // Extract segmentation mask (only valid region, remove padding)
         let mask_data: Vec<f32> = output.iter().cloned().collect();
 
-        // 二值化
+        // Binarization
         let binary_mask: Vec<u8> = mask_data
             .iter()
             .map(|&v| {
@@ -324,8 +322,8 @@ impl DetModel {
             })
             .collect();
 
-        // 提取边界框（使用 unclip 扩展）
-        // DB 算法需要对检测到的轮廓进行扩展，因为模型输出的分割掩码比实际文本区域小
+        // Extract bounding boxes (with unclip expansion)
+        // DB algorithm needs to expand detected contours because model output segmentation mask is usually smaller than actual text region
         let boxes = extract_boxes_with_unclip(
             &binary_mask,
             out_w,
@@ -342,27 +340,27 @@ impl DetModel {
     }
 }
 
-/// 底层检测 API
+/// Low-level detection API
 impl DetModel {
-    /// 原始推理接口
+    /// Raw inference interface
     ///
-    /// 直接执行模型推理，不进行预处理和后处理
+    /// Execute model inference directly without preprocessing and postprocessing
     ///
-    /// # 参数
-    /// - `input`: 预处理后的输入张量 [1, 3, H, W]
+    /// # Parameters
+    /// - `input`: Preprocessed input tensor [1, 3, H, W]
     ///
-    /// # 返回
-    /// 模型原始输出
+    /// # Returns
+    /// Model raw output
     pub fn run_raw(&self, input: ndarray::ArrayViewD<f32>) -> OcrResult<ArrayD<f32>> {
         Ok(self.engine.run_dynamic(input)?)
     }
 
-    /// 获取模型输入形状
+    /// Get model input shape
     pub fn input_shape(&self) -> &[usize] {
         self.engine.input_shape()
     }
 
-    /// 获取模型输出形状
+    /// Get model output shape
     pub fn output_shape(&self) -> &[usize] {
         self.engine.output_shape()
     }
@@ -433,20 +431,20 @@ mod tests {
 
     #[test]
     fn test_det_options_chaining() {
-        // 测试链式调用不会丢失之前的设置
+        // Test that chaining calls do not lose previous settings
         let opts = DetOptions::new()
             .with_max_side_len(1000)
             .with_box_threshold(0.7);
 
         assert_eq!(opts.max_side_len, 1000);
         assert_eq!(opts.box_threshold, 0.7);
-        // 其他值应该是默认值
+        // Other values should be default values
         assert_eq!(opts.score_threshold, 0.3);
     }
 
     #[test]
     fn test_det_options_presets_are_valid() {
-        // 确保预设的参数值在有效范围内
+        // Ensure preset parameter values are within valid ranges
         let fast = DetOptions::fast();
         assert!(fast.box_threshold >= 0.0 && fast.box_threshold <= 1.0);
         assert!(fast.score_threshold >= 0.0 && fast.score_threshold <= 1.0);

@@ -1,24 +1,22 @@
-//! 图像预处理工具
-//!
 //! Image Preprocessing Utilities
 //!
-//! 提供 OCR 所需的各种图像预处理功能
+//! Provides various image preprocessing functions required for OCR
 
 use image::{DynamicImage, GenericImageView, RgbImage};
 use ndarray::{Array4, ArrayBase, Dim, OwnedRepr};
 
-/// 图像归一化参数
+/// Image normalization parameters
 #[derive(Debug, Clone)]
 pub struct NormalizeParams {
-    /// RGB 通道均值
+    /// RGB channel means
     pub mean: [f32; 3],
-    /// RGB 通道标准差
+    /// RGB channel standard deviations
     pub std: [f32; 3],
 }
 
 impl Default for NormalizeParams {
     fn default() -> Self {
-        // ImageNet 标准化参数
+        // ImageNet normalization parameters
         Self {
             mean: [0.485, 0.456, 0.406],
             std: [0.229, 0.224, 0.225],
@@ -27,7 +25,7 @@ impl Default for NormalizeParams {
 }
 
 impl NormalizeParams {
-    /// PaddleOCR 检测模型使用的归一化参数
+    /// Normalization parameters for PaddleOCR detection model
     pub fn paddle_det() -> Self {
         Self {
             mean: [0.485, 0.456, 0.406],
@@ -35,7 +33,7 @@ impl NormalizeParams {
         }
     }
 
-    /// PaddleOCR 识别模型使用的归一化参数
+    /// Normalization parameters for PaddleOCR recognition model
     pub fn paddle_rec() -> Self {
         Self {
             mean: [0.5, 0.5, 0.5],
@@ -44,15 +42,15 @@ impl NormalizeParams {
     }
 }
 
-/// 计算需要填充到的尺寸 (32的倍数)
+/// Calculate size to pad to (multiple of 32)
 #[inline]
 pub fn get_padded_size(size: u32) -> u32 {
     ((size + 31) / 32) * 32
 }
 
-/// 将图像缩放到指定的最大边长
+/// Scale image to specified maximum side length
 ///
-/// 保持宽高比，将最长边缩放到 max_side_len
+/// Maintains aspect ratio, scales longest side to max_side_len
 pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> DynamicImage {
     let (w, h) = img.dimensions();
     let max_dim = w.max(h);
@@ -68,9 +66,9 @@ pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> DynamicImage
     fast_resize(img, new_w, new_h)
 }
 
-/// 将图像缩放到指定高度 (用于识别模型)
+/// Scale image to specified height (for recognition model)
 ///
-/// 保持宽高比缩放
+/// Scales maintaining aspect ratio
 pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> DynamicImage {
     let (w, h) = img.dimensions();
 
@@ -84,22 +82,22 @@ pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> DynamicImage 
     fast_resize(img, new_w, target_height)
 }
 
-/// 使用 fast_image_resize 进行快速图像缩放
-/// 启用 "image" feature 后可以直接传入 DynamicImage
+/// Fast image resizing using fast_image_resize
+/// Can pass DynamicImage directly when "image" feature is enabled
 fn fast_resize(img: &DynamicImage, new_w: u32, new_h: u32) -> DynamicImage {
     use fast_image_resize::{images::Image, IntoImageView, PixelType, Resizer};
 
-    // 获取源图像的像素类型
+    // Get source image pixel type
     let pixel_type = img.pixel_type().unwrap_or(PixelType::U8x3);
 
-    // 创建目标图像容器
+    // Create destination image container
     let mut dst_image = Image::new(new_w, new_h, pixel_type);
 
-    // 使用 Resizer 进行缩放（直接传入 DynamicImage，无需手动转换）
+    // Resize using Resizer (pass DynamicImage directly, no manual conversion needed)
     let mut resizer = Resizer::new();
     resizer.resize(img, &mut dst_image, None).unwrap();
 
-    // 将结果转回 DynamicImage
+    // Convert result back to DynamicImage
     match pixel_type {
         PixelType::U8x3 => {
             DynamicImage::ImageRgb8(RgbImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap())
@@ -108,15 +106,15 @@ fn fast_resize(img: &DynamicImage, new_w: u32, new_h: u32) -> DynamicImage {
             image::RgbaImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap(),
         ),
         _ => {
-            // 其他类型转为 RGB
+            // Convert other types to RGB
             DynamicImage::ImageRgb8(RgbImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap())
         }
     }
 }
 
-/// 将图像转换为检测模型的输入张量
+/// Convert image to detection model input tensor
 ///
-/// 输出格式: [1, 3, H, W] (NCHW)
+/// Output format: [1, 3, H, W] (NCHW)
 pub fn preprocess_for_det(
     img: &DynamicImage,
     params: &NormalizeParams,
@@ -128,7 +126,7 @@ pub fn preprocess_for_det(
     let mut input = Array4::<f32>::zeros((1, 3, pad_h, pad_w));
     let rgb_img = img.to_rgb8();
 
-    // 归一化并填充
+    // Normalize and pad
     for y in 0..h as usize {
         for x in 0..w as usize {
             let pixel = rgb_img.get_pixel(x as u32, y as u32);
@@ -143,10 +141,10 @@ pub fn preprocess_for_det(
     input
 }
 
-/// 将图像转换为识别模型的输入张量
+/// Convert image to recognition model input tensor
 ///
-/// 输出格式: [1, 3, H, W] (NCHW)
-/// 高度固定为 48 (或指定值)，宽度按比例缩放
+/// Output format: [1, 3, H, W] (NCHW)
+/// Height is fixed at 48 (or specified value), width scaled proportionally
 pub fn preprocess_for_rec(
     img: &DynamicImage,
     target_height: u32,
@@ -154,11 +152,11 @@ pub fn preprocess_for_rec(
 ) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
     let (w, h) = img.dimensions();
 
-    // 计算缩放后的宽度
+    // Calculate scaled width
     let scale = target_height as f64 / h as f64;
     let target_width = (w as f64 * scale).round() as u32;
 
-    // 缩放图像
+    // Scale image
     let resized = if h != target_height {
         img.resize_exact(
             target_width,
@@ -188,9 +186,9 @@ pub fn preprocess_for_rec(
     input
 }
 
-/// 批量预处理识别图像
+/// Batch preprocess recognition images
 ///
-/// 将多个图像处理为批次张量，所有图像填充到相同宽度
+/// Process multiple images into batch tensor, all images padded to same width
 pub fn preprocess_batch_for_rec(
     images: &[DynamicImage],
     target_height: u32,
@@ -200,7 +198,7 @@ pub fn preprocess_batch_for_rec(
         return Array4::<f32>::zeros((0, 3, target_height as usize, 0));
     }
 
-    // 计算所有图像缩放后的宽度
+    // Calculate scaled width for all images
     let widths: Vec<u32> = images
         .iter()
         .map(|img| {
@@ -234,20 +232,20 @@ pub fn preprocess_batch_for_rec(
     batch
 }
 
-/// 裁剪图像区域
+/// Crop image region
 pub fn crop_image(img: &DynamicImage, x: u32, y: u32, width: u32, height: u32) -> DynamicImage {
     img.crop_imm(x, y, width, height)
 }
 
-/// 将图像分块 (用于高精度模式)
+/// Split image into blocks (for high precision mode)
 ///
-/// # 参数
-/// - `img`: 输入图像
-/// - `block_size`: 分块大小
-/// - `overlap`: 重叠区域大小
+/// # Parameters
+/// - `img`: Input image
+/// - `block_size`: Block size
+/// - `overlap`: Overlap region size
 ///
-/// # 返回
-/// 分块图像列表及其在原图中的位置 (x, y)
+/// # Returns
+/// List of block images and their positions in original image (x, y)
 pub fn split_into_blocks(
     img: &DynamicImage,
     block_size: u32,
@@ -283,25 +281,25 @@ pub fn split_into_blocks(
     blocks
 }
 
-/// 将灰度掩码转换为二值掩码
+/// Convert grayscale mask to binary mask
 pub fn threshold_mask(mask: &[f32], threshold: f32) -> Vec<u8> {
     mask.iter()
         .map(|&v| if v > threshold { 255u8 } else { 0u8 })
         .collect()
 }
 
-/// 创建灰度图像
+/// Create grayscale image
 pub fn create_gray_image(data: &[u8], width: u32, height: u32) -> image::GrayImage {
     image::GrayImage::from_raw(width, height, data.to_vec())
         .unwrap_or_else(|| image::GrayImage::new(width, height))
 }
 
-/// 图像转 RGB
+/// Convert image to RGB
 pub fn to_rgb(img: &DynamicImage) -> RgbImage {
     img.to_rgb8()
 }
 
-/// 从 RGB 数据创建图像
+/// Create image from RGB data
 pub fn rgb_to_image(data: &[u8], width: u32, height: u32) -> DynamicImage {
     let rgb = RgbImage::from_raw(width, height, data.to_vec())
         .unwrap_or_else(|| RgbImage::new(width, height));

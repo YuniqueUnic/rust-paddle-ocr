@@ -15,7 +15,7 @@ keywords = [
     "computer-vision",
 ]
 categories = ["computer-vision", "text-processing", "multimedia"]
-documentation = "https://docs.rs/rust-paddle-ocr"
+documentation = "https://docs.rs/ocr-rs"
 exclude = [
     "assets/*",
     "tests/*",
@@ -39,6 +39,14 @@ coreml = [] # CoreML 加速 (macOS/iOS)
 
 # 可选特性
 async = ["tokio", "futures"]
+
+# docs.rs 专用特性，跳过 C++ 编译
+docsrs = []
+
+[package.metadata.docs.rs]
+features = ["docsrs"]
+default-features = false
+targets = ["x86_64-unknown-linux-gnu"]
 
 [lib]
 crate-type = ["lib", "cdylib"]

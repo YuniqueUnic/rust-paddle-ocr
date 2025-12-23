@@ -1,27 +1,25 @@
-//! 后处理工具
-//!
 //! Postprocessing Utilities
 //!
-//! 提供文本检测结果的后处理功能，包括边界框提取、NMS、框合并等
+//! Provides post-processing functions for text detection results, including bounding box extraction, NMS, box merging, etc.
 
 use image::GrayImage;
 use imageproc::contours::{find_contours, Contour};
 use imageproc::point::Point;
 use imageproc::rect::Rect;
 
-/// 文本边界框
+/// Text bounding box
 #[derive(Debug, Clone)]
 pub struct TextBox {
-    /// 边界框矩形
+    /// Bounding box rectangle
     pub rect: Rect,
-    /// 置信度分数
+    /// Confidence score
     pub score: f32,
-    /// 四个角点 (可选，用于旋转框)
+    /// Four corner points (optional, for rotated boxes)
     pub points: Option<[Point<f32>; 4]>,
 }
 
 impl TextBox {
-    /// 创建新的文本边界框
+    /// Create new text bounding box
     pub fn new(rect: Rect, score: f32) -> Self {
         Self {
             rect,
@@ -30,7 +28,7 @@ impl TextBox {
         }
     }
 
-    /// 带角点创建
+    /// Create with corner points
     pub fn with_points(rect: Rect, score: f32, points: [Point<f32>; 4]) -> Self {
         Self {
             rect,
@@ -39,12 +37,12 @@ impl TextBox {
         }
     }
 
-    /// 计算面积
+    /// Calculate area
     pub fn area(&self) -> u32 {
         self.rect.width() * self.rect.height()
     }
 
-    /// 扩展边界框
+    /// Expand bounding box
     pub fn expand(&self, border: u32, max_width: u32, max_height: u32) -> Self {
         let x = (self.rect.left() - border as i32).max(0) as u32;
         let y = (self.rect.top() - border as i32).max(0) as u32;
@@ -63,16 +61,16 @@ impl TextBox {
     }
 }
 
-/// 从分割掩码中提取文本边界框
+/// Extract text bounding boxes from segmentation mask
 ///
-/// # 参数
-/// - `mask`: 二值化后的掩码 (0 或 255)
-/// - `width`: 掩码宽度
-/// - `height`: 掩码高度
-/// - `original_width`: 原始图像宽度
-/// - `original_height`: 原始图像高度
-/// - `min_area`: 最小边界框面积
-/// - `box_threshold`: 边界框分数阈值
+/// # Parameters
+/// - `mask`: Binarized mask (0 or 255)
+/// - `width`: Mask width
+/// - `height`: Mask height
+/// - `original_width`: Original image width
+/// - `original_height`: Original image height
+/// - `min_area`: Minimum bounding box area
+/// - `box_threshold`: Bounding box score threshold
 pub fn extract_boxes_from_mask(
     mask: &[u8],
     width: u32,
@@ -95,18 +93,18 @@ pub fn extract_boxes_from_mask(
     )
 }
 
-/// 从带 padding 的分割掩码中提取文本边界框
+/// Extract text bounding boxes from segmentation mask with padding
 ///
-/// # 参数
-/// - `mask`: 二值化后的掩码 (0 或 255)
-/// - `mask_width`: 掩码宽度（含 padding）
-/// - `mask_height`: 掩码高度（含 padding）
-/// - `valid_width`: 有效区域宽度（不含 padding）
-/// - `valid_height`: 有效区域高度（不含 padding）
-/// - `original_width`: 原始图像宽度
-/// - `original_height`: 原始图像高度
-/// - `min_area`: 最小边界框面积
-/// - `box_threshold`: 边界框分数阈值
+/// # Parameters
+/// - `mask`: Binarized mask (0 or 255)
+/// - `mask_width`: Mask width (including padding)
+/// - `mask_height`: Mask height (including padding)
+/// - `valid_width`: Valid region width (excluding padding)
+/// - `valid_height`: Valid region height (excluding padding)
+/// - `original_width`: Original image width
+/// - `original_height`: Original image height
+/// - `min_area`: Minimum bounding box area
+/// - `box_threshold`: Bounding box score threshold
 pub fn extract_boxes_from_mask_with_padding(
     mask: &[u8],
     mask_width: u32,
@@ -131,10 +129,10 @@ pub fn extract_boxes_from_mask_with_padding(
     )
 }
 
-/// 从分割掩码中提取文本边界框（带 unclip 扩展）
+/// Extract text bounding boxes from segmentation mask (with unclip expansion)
 ///
-/// DB 算法的核心是对检测到的轮廓进行 unclip 扩展，
-/// 因为模型输出的分割掩码通常比实际文本区域要小。
+/// Core of DB algorithm is to perform unclip expansion on detected contours,
+/// because model output segmentation mask is usually smaller than actual text region.
 pub fn extract_boxes_with_unclip(
     mask: &[u8],
     mask_width: u32,
@@ -146,22 +144,22 @@ pub fn extract_boxes_with_unclip(
     min_area: u32,
     unclip_ratio: f32,
 ) -> Vec<TextBox> {
-    // 创建灰度图像
+    // Create grayscale image
     let gray_image = GrayImage::from_raw(mask_width, mask_height, mask.to_vec())
         .unwrap_or_else(|| GrayImage::new(mask_width, mask_height));
 
-    // 查找轮廓
+    // Find contours
     let contours = find_contours::<i32>(&gray_image);
 
-    // 计算缩放比例（从有效区域到原始图像）
+    // Calculate scale ratio (from valid region to original image)
     let scale_x = original_width as f32 / valid_width as f32;
     let scale_y = original_height as f32 / valid_height as f32;
 
     let mut boxes = Vec::new();
 
     for contour in contours {
-        // 只保留外部轮廓（没有父轮廓的），过滤掉内部/嵌套的轮廓
-        // 这可以避免产生重叠的检测框
+        // Only keep outer contours (without parent), filter out inner/nested contours
+        // This avoids producing overlapping detection boxes
         if contour.parent.is_some() {
             continue;
         }
@@ -170,15 +168,15 @@ pub fn extract_boxes_with_unclip(
             continue;
         }
 
-        // 计算边界框
+        // Calculate bounding box
         let (min_x, min_y, max_x, max_y) = get_contour_bounds(&contour);
 
-        // 过滤掉在 padding 区域的轮廓
+        // Filter out contours in padding area
         if min_x >= valid_width as i32 || min_y >= valid_height as i32 {
             continue;
         }
 
-        // 裁剪到有效区域
+        // Clip to valid region
         let min_x = min_x.max(0);
         let min_y = min_y.max(0);
         let max_x = max_x.min(valid_width as i32);
@@ -187,18 +185,18 @@ pub fn extract_boxes_with_unclip(
         let box_width = (max_x - min_x) as u32;
         let box_height = (max_y - min_y) as u32;
 
-        // 过滤太小的框
+        // Filter boxes that are too small
         if box_width * box_height < min_area {
             continue;
         }
 
-        // 计算 unclip 扩展量
-        // DB 算法使用面积和周长计算扩展距离: distance = Area * unclip_ratio / Perimeter
+        // Calculate unclip expansion amount
+        // DB algorithm uses area and perimeter to calculate expansion distance: distance = Area * unclip_ratio / Perimeter
         let area = box_width as f32 * box_height as f32;
         let perimeter = 2.0 * (box_width + box_height) as f32;
         let expand_dist = (area * unclip_ratio / perimeter).max(1.0);
 
-        // 应用 unclip 扩展（在缩放前的坐标上）
+        // Apply unclip expansion (on coordinates before scaling)
         let expanded_min_x = (min_x as f32 - expand_dist).max(0.0) as i32;
         let expanded_min_y = (min_y as f32 - expand_dist).max(0.0) as i32;
         let expanded_max_x = (max_x as f32 + expand_dist).min(valid_width as f32) as i32;
@@ -207,13 +205,13 @@ pub fn extract_boxes_with_unclip(
         let expanded_w = (expanded_max_x - expanded_min_x) as u32;
         let expanded_h = (expanded_max_y - expanded_min_y) as u32;
 
-        // 缩放到原始图像尺寸
+        // Scale to original image size
         let scaled_x = (expanded_min_x as f32 * scale_x) as i32;
         let scaled_y = (expanded_min_y as f32 * scale_y) as i32;
         let scaled_w = (expanded_w as f32 * scale_x) as u32;
         let scaled_h = (expanded_h as f32 * scale_y) as u32;
 
-        // 确保边界在有效范围内
+        // Ensure boundaries are within valid range
         let final_x = scaled_x.max(0) as u32;
         let final_y = scaled_y.max(0) as u32;
         let final_w = scaled_w.min(original_width.saturating_sub(final_x));
@@ -228,7 +226,7 @@ pub fn extract_boxes_with_unclip(
     boxes
 }
 
-/// 获取轮廓的边界
+/// Get contour bounds
 fn get_contour_bounds(contour: &Contour<i32>) -> (i32, i32, i32, i32) {
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
@@ -245,7 +243,7 @@ fn get_contour_bounds(contour: &Contour<i32>) -> (i32, i32, i32, i32) {
     (min_x, min_y, max_x, max_y)
 }
 
-/// 计算一个框被另一个框包含的比例
+/// Calculate containment ratio of one box inside another
 fn compute_containment_ratio(inner: &Rect, outer: &Rect) -> f32 {
     let x1 = inner.left().max(outer.left());
     let y1 = inner.top().max(outer.top());
@@ -266,23 +264,23 @@ fn compute_containment_ratio(inner: &Rect, outer: &Rect) -> f32 {
     }
 }
 
-/// 非极大值抑制 (NMS)
+/// Non-Maximum Suppression (NMS)
 ///
-/// 过滤重叠的边界框，保留分数最高的
-/// 同时会过滤掉被其他框大面积包含的小框
+/// Filter overlapping bounding boxes, keep ones with highest scores
+/// Also filters small boxes that are largely contained within other boxes
 ///
-/// # 参数
-/// - `boxes`: 边界框列表
-/// - `iou_threshold`: IoU 阈值，超过此值认为是重叠
+/// # Parameters
+/// - `boxes`: List of bounding boxes
+/// - `iou_threshold`: IoU threshold, boxes exceeding this value are considered overlapping
 pub fn nms(boxes: &[TextBox], iou_threshold: f32) -> Vec<TextBox> {
     if boxes.is_empty() {
         return Vec::new();
     }
 
-    // 按分数降序、面积降序排列（分数高且面积大的优先保留）
+    // Sort by score descending, area descending (keep boxes with higher score and larger area first)
     let mut indices: Vec<usize> = (0..boxes.len()).collect();
     indices.sort_by(|&a, &b| {
-        // 首先按分数降序
+        // First sort by score descending
         let score_cmp = boxes[b]
             .score
             .partial_cmp(&boxes[a].score)
@@ -290,7 +288,7 @@ pub fn nms(boxes: &[TextBox], iou_threshold: f32) -> Vec<TextBox> {
         if score_cmp != std::cmp::Ordering::Equal {
             return score_cmp;
         }
-        // 分数相同时按面积降序（优先保留大框）
+        // When scores are equal, sort by area descending (prefer larger boxes)
         boxes[b].area().cmp(&boxes[a].area())
     });
 
@@ -304,28 +302,28 @@ pub fn nms(boxes: &[TextBox], iou_threshold: f32) -> Vec<TextBox> {
 
         keep.push(boxes[i].clone());
 
-        // 检查后续所有框（分数更低或面积更小的框）
+        // Check all subsequent boxes (lower score or smaller area)
         for &j in indices.iter().skip(pos + 1) {
             if suppressed[j] {
                 continue;
             }
 
-            // 检查 IoU
+            // Check IoU
             let iou = compute_iou(&boxes[i].rect, &boxes[j].rect);
             if iou > iou_threshold {
                 suppressed[j] = true;
                 continue;
             }
 
-            // 检查包含关系：如果 j 被 i 大面积包含（>50%），则抑制 j
+            // Check containment relationship: if j is largely contained (>50%) by i, suppress j
             let containment_j_in_i = compute_containment_ratio(&boxes[j].rect, &boxes[i].rect);
             if containment_j_in_i > 0.5 {
                 suppressed[j] = true;
                 continue;
             }
 
-            // 检查反向包含：如果 i 被 j 大面积包含（>70%），
-            // 由于 i 优先被选中（分数更高或面积更大），抑制 j
+            // Check reverse containment: if i is largely contained (>70%) by j,
+            // since i was selected first (higher score or larger area), suppress j
             let containment_i_in_j = compute_containment_ratio(&boxes[i].rect, &boxes[j].rect);
             if containment_i_in_j > 0.7 {
                 suppressed[j] = true;
@@ -337,7 +335,7 @@ pub fn nms(boxes: &[TextBox], iou_threshold: f32) -> Vec<TextBox> {
     keep
 }
 
-/// 计算两个矩形的 IoU (交并比)
+/// Calculate IoU (Intersection over Union) of two rectangles
 pub fn compute_iou(a: &Rect, b: &Rect) -> f32 {
     let x1 = a.left().max(b.left());
     let y1 = a.top().max(b.top());
@@ -360,13 +358,13 @@ pub fn compute_iou(a: &Rect, b: &Rect) -> f32 {
     }
 }
 
-/// 合并相邻的边界框
+/// Merge adjacent bounding boxes
 ///
-/// 将距离较近的边界框合并为一个
+/// Merge bounding boxes that are close to each other into one
 ///
-/// # 参数
-/// - `boxes`: 边界框列表
-/// - `distance_threshold`: 距离阈值，小于此值的框会被合并
+/// # Parameters
+/// - `boxes`: List of bounding boxes
+/// - `distance_threshold`: Distance threshold, boxes below this value will be merged
 pub fn merge_adjacent_boxes(boxes: &[TextBox], distance_threshold: i32) -> Vec<TextBox> {
     if boxes.is_empty() {
         return Vec::new();
@@ -385,7 +383,7 @@ pub fn merge_adjacent_boxes(boxes: &[TextBox], distance_threshold: i32) -> Vec<T
         let mut count = 1;
         used[i] = true;
 
-        // 查找可以合并的框
+        // Find boxes that can be merged
         loop {
             let mut found = false;
 
@@ -414,9 +412,9 @@ pub fn merge_adjacent_boxes(boxes: &[TextBox], distance_threshold: i32) -> Vec<T
     merged
 }
 
-/// 判断两个框是否可以合并
+/// Check if two boxes can be merged
 fn can_merge(a: &Rect, b: &Rect, threshold: i32) -> bool {
-    // 计算垂直距离
+    // Calculate vertical distance
     let a_bottom = a.top() + a.height() as i32;
     let b_bottom = b.top() + b.height() as i32;
 
@@ -425,10 +423,10 @@ fn can_merge(a: &Rect, b: &Rect, threshold: i32) -> bool {
     } else if b.top() > a_bottom {
         b.top() - a_bottom
     } else {
-        0 // 垂直重叠
+        0 // Vertical overlap
     };
 
-    // 计算水平距离
+    // Calculate horizontal distance
     let a_right = a.left() + a.width() as i32;
     let b_right = b.left() + b.width() as i32;
 
@@ -437,16 +435,16 @@ fn can_merge(a: &Rect, b: &Rect, threshold: i32) -> bool {
     } else if b.left() > a_right {
         b.left() - a_right
     } else {
-        0 // 水平重叠
+        0 // Horizontal overlap
     };
 
-    // 检查是否在同一行 (垂直重叠) 且水平距离小于阈值
+    // Check if on same line (vertical overlap) and horizontal distance is less than threshold
     let vertical_overlap = !(a.top() > b_bottom || b.top() > a_bottom);
 
     vertical_overlap && horizontal_dist <= threshold
 }
 
-/// 合并两个矩形
+/// Merge two rectangles
 fn merge_rects(a: &Rect, b: &Rect) -> Rect {
     let x1 = a.left().min(b.left());
     let y1 = a.top().min(b.top());
@@ -456,22 +454,22 @@ fn merge_rects(a: &Rect, b: &Rect) -> Rect {
     Rect::at(x1, y1).of_size((x2 - x1) as u32, (y2 - y1) as u32)
 }
 
-/// 按阅读顺序排序边界框 (从上到下，从左到右)
+/// Sort bounding boxes by reading order (top to bottom, left to right)
 pub fn sort_boxes_by_reading_order(boxes: &mut [TextBox]) {
     boxes.sort_by(|a, b| {
-        // 首先按 y 坐标排序 (行)
+        // First sort by y coordinate (row)
         let y_cmp = a.rect.top().cmp(&b.rect.top());
         if y_cmp != std::cmp::Ordering::Equal {
             return y_cmp;
         }
-        // 同一行按 x 坐标排序
+        // Same row, sort by x coordinate
         a.rect.left().cmp(&b.rect.left())
     });
 }
 
-/// 按行分组边界框
+/// Group bounding boxes by line
 ///
-/// 将 y 坐标接近的框归为同一行
+/// Group boxes with close y coordinates into the same line
 pub fn group_boxes_by_line(boxes: &[TextBox], line_threshold: i32) -> Vec<Vec<TextBox>> {
     if boxes.is_empty() {
         return Vec::new();
@@ -488,7 +486,7 @@ pub fn group_boxes_by_line(boxes: &[TextBox], line_threshold: i32) -> Vec<Vec<Te
         if (box_item.rect.top() - current_y).abs() <= line_threshold {
             current_line.push(box_item.clone());
         } else {
-            // 对当前行按 x 排序
+            // Sort current line by x
             current_line.sort_by_key(|b| b.rect.left());
             lines.push(current_line);
             current_line = vec![box_item.clone()];
@@ -496,7 +494,7 @@ pub fn group_boxes_by_line(boxes: &[TextBox], line_threshold: i32) -> Vec<Vec<Te
         }
     }
 
-    // 添加最后一行
+    // Add last line
     if !current_line.is_empty() {
         current_line.sort_by_key(|b| b.rect.left());
         lines.push(current_line);
@@ -505,11 +503,11 @@ pub fn group_boxes_by_line(boxes: &[TextBox], line_threshold: i32) -> Vec<Vec<Te
     lines
 }
 
-/// 从多个检测结果中合并边界框 (用于高精度模式)
+/// Merge bounding boxes from multiple detection results (for high precision mode)
 ///
-/// # 参数
-/// - `results`: 多次检测的结果，每个元素是 (boxes, offset_x, offset_y, scale)
-/// - `iou_threshold`: NMS 的 IoU 阈值
+/// # Parameters
+/// - `results`: Multiple detection results, each element is (boxes, offset_x, offset_y, scale)
+/// - `iou_threshold`: NMS IoU threshold
 pub fn merge_multi_scale_results(
     results: &[(Vec<TextBox>, u32, u32, f32)],
     iou_threshold: f32,
@@ -518,7 +516,7 @@ pub fn merge_multi_scale_results(
 
     for (boxes, offset_x, offset_y, scale) in results {
         for box_item in boxes {
-            // 将框坐标转换到原始图像坐标系
+            // Convert box coordinates to original image coordinate system
             let scaled_x = (box_item.rect.left() as f32 / scale) as i32 + *offset_x as i32;
             let scaled_y = (box_item.rect.top() as f32 / scale) as i32 + *offset_y as i32;
             let scaled_w = (box_item.rect.width() as f32 / scale) as u32;
@@ -529,23 +527,23 @@ pub fn merge_multi_scale_results(
         }
     }
 
-    // 应用 NMS 去除重复
+    // Apply NMS to remove duplicates
     nms(&all_boxes, iou_threshold)
 }
 
-// ============== 传统算法检测 ==============
+// ============== Traditional Algorithm Detection ==============
 
-/// 使用传统算法检测文本区域（适用于纯色背景）
+/// Detect text regions using traditional algorithm (suitable for solid background)
 ///
-/// 基于 OTSU 二值化 + 连通域分析，适合：
-/// - 纯色背景的文档图像
-/// - 高对比度的文本
-/// - 作为深度学习检测的补充
+/// Based on OTSU binarization + connected component analysis, suitable for:
+/// - Document images with solid background
+/// - High contrast text
+/// - As supplement to deep learning detection
 ///
-/// # 参数
-/// - `gray_image`: 灰度图像
-/// - `min_area`: 最小文本区域面积
-/// - `expand_ratio`: 边界框扩展比例
+/// # Parameters
+/// - `gray_image`: Grayscale image
+/// - `min_area`: Minimum text region area
+/// - `expand_ratio`: Bounding box expansion ratio
 pub fn detect_text_traditional(
     gray_image: &GrayImage,
     min_area: u32,
@@ -553,21 +551,21 @@ pub fn detect_text_traditional(
 ) -> Vec<TextBox> {
     let (width, height) = gray_image.dimensions();
 
-    // 1. 计算 OTSU 阈值
+    // 1. Calculate OTSU threshold
     let threshold = otsu_threshold(gray_image);
 
-    // 2. 二值化
+    // 2. Binarization
     let binary: Vec<u8> = gray_image
         .pixels()
         .map(|p| if p.0[0] < threshold { 255 } else { 0 })
         .collect();
 
-    // 3. 创建二值图像并查找轮廓
+    // 3. Create binary image and find contours
     let binary_image =
         GrayImage::from_raw(width, height, binary).unwrap_or_else(|| GrayImage::new(width, height));
     let contours = find_contours::<i32>(&binary_image);
 
-    // 4. 提取边界框
+    // 4. Extract bounding boxes
     let mut boxes = Vec::new();
     for contour in contours {
         if contour.points.len() < 4 {
@@ -582,7 +580,7 @@ pub fn detect_text_traditional(
             continue;
         }
 
-        // 扩展边界框
+        // Expand bounding box
         let expand_w = (box_width as f32 * expand_ratio * 0.5) as i32;
         let expand_h = (box_height as f32 * expand_ratio * 0.5) as i32;
 
@@ -601,13 +599,13 @@ pub fn detect_text_traditional(
         }
     }
 
-    // 5. 合并相邻框形成文本行
+    // 5. Merge adjacent boxes to form text lines
     merge_into_text_lines(&boxes, 10)
 }
 
-/// OTSU 自适应阈值计算
+/// OTSU adaptive threshold calculation
 fn otsu_threshold(image: &GrayImage) -> u8 {
-    // 计算直方图
+    // Calculate histogram
     let mut histogram = [0u32; 256];
     for pixel in image.pixels() {
         histogram[pixel.0[0] as usize] += 1;
@@ -649,13 +647,13 @@ fn otsu_threshold(image: &GrayImage) -> u8 {
     threshold
 }
 
-/// 将独立的字符框合并成文本行
+/// Merge independent character boxes into text lines
 fn merge_into_text_lines(boxes: &[TextBox], gap_threshold: i32) -> Vec<TextBox> {
     if boxes.is_empty() {
         return Vec::new();
     }
 
-    // 按 y 坐标分组
+    // Group by y coordinate
     let mut sorted_boxes: Vec<_> = boxes.iter().collect();
     sorted_boxes.sort_by_key(|b| b.rect.top());
 
@@ -664,18 +662,18 @@ fn merge_into_text_lines(boxes: &[TextBox], gap_threshold: i32) -> Vec<TextBox> 
     for bbox in sorted_boxes {
         let mut merged = false;
 
-        // 尝试合并到现有行
+        // Try to merge into existing lines
         for line in &mut lines {
             let line_center_y = line.rect.top() + line.rect.height() as i32 / 2;
             let box_center_y = bbox.rect.top() + bbox.rect.height() as i32 / 2;
 
-            // 如果垂直方向重叠且水平方向接近
+            // If vertical overlap and horizontal proximity
             if (line_center_y - box_center_y).abs() < line.rect.height() as i32 / 2 {
                 let line_right = line.rect.left() + line.rect.width() as i32;
                 let box_left = bbox.rect.left();
 
                 if (box_left - line_right).abs() < gap_threshold * 3 {
-                    // 合并
+                    // Merge
                     let new_left = line.rect.left().min(bbox.rect.left());
                     let new_top = line.rect.top().min(bbox.rect.top());
                     let new_right = (line.rect.left() + line.rect.width() as i32)

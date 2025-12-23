@@ -1,8 +1,6 @@
-//! OCR 引擎
-//!
 //! OCR Engine
 //!
-//! 提供完整的 OCR 流程封装，一次调用完成检测和识别
+//! Provides complete OCR pipeline encapsulation, performs detection and recognition in one call
 
 use image::DynamicImage;
 use std::path::Path;
@@ -13,19 +11,19 @@ use crate::mnn::{Backend, InferenceConfig, PrecisionMode};
 use crate::postprocess::TextBox;
 use crate::rec::{RecModel, RecOptions, RecognitionResult};
 
-/// OCR 结果
+/// OCR result
 #[derive(Debug, Clone)]
 pub struct OcrResult_ {
-    /// 识别的文本
+    /// Recognized text
     pub text: String,
-    /// 置信度
+    /// Confidence score
     pub confidence: f32,
-    /// 边界框
+    /// Bounding box
     pub bbox: TextBox,
 }
 
 impl OcrResult_ {
-    /// 创建新的 OCR 结果
+    /// Create a new OCR result
     pub fn new(text: String, confidence: f32, bbox: TextBox) -> Self {
         Self {
             text,
@@ -35,22 +33,22 @@ impl OcrResult_ {
     }
 }
 
-/// OCR 引擎配置
+/// OCR engine configuration
 #[derive(Debug, Clone)]
 pub struct OcrEngineConfig {
-    /// 推理后端
+    /// Inference backend
     pub backend: Backend,
-    /// 线程数
+    /// Thread count
     pub thread_count: i32,
-    /// 精度模式
+    /// Precision mode
     pub precision_mode: PrecisionMode,
-    /// 检测选项
+    /// Detection options
     pub det_options: DetOptions,
-    /// 识别选项
+    /// Recognition options
     pub rec_options: RecOptions,
-    /// 是否启用并行识别（使用 rayon 对多个文本区域并行处理）
+    /// Whether to enable parallel recognition (use rayon to process multiple text regions in parallel)
     pub enable_parallel: bool,
-    /// 结果级别的最小置信度阈值（低于此值的识别结果将被过滤）
+    /// Minimum confidence threshold at result level (recognition results below this value will be filtered)
     pub min_result_confidence: f32,
 }
 
@@ -69,60 +67,60 @@ impl Default for OcrEngineConfig {
 }
 
 impl OcrEngineConfig {
-    /// 创建新的配置
+    /// Create new configuration
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 设置推理后端
+    /// Set inference backend
     pub fn with_backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
         self
     }
 
-    /// 设置线程数
+    /// Set thread count
     pub fn with_threads(mut self, threads: i32) -> Self {
         self.thread_count = threads;
         self
     }
 
-    /// 设置精度模式
+    /// Set precision mode
     pub fn with_precision(mut self, precision: PrecisionMode) -> Self {
         self.precision_mode = precision;
         self
     }
 
-    /// 设置检测选项
+    /// Set detection options
     pub fn with_det_options(mut self, options: DetOptions) -> Self {
         self.det_options = options;
         self
     }
 
-    /// 设置识别选项
+    /// Set recognition options
     pub fn with_rec_options(mut self, options: RecOptions) -> Self {
         self.rec_options = options;
         self
     }
 
-    /// 启用/禁用并行处理
+    /// Enable/disable parallel processing
     ///
-    /// 注意：当检测到多个文本区域时，使用 rayon 并行识别。
-    /// 如果 MNN 已经设置多线程，启用此选项可能导致过多线程竞争。
+    /// Note: When multiple text regions are detected, use rayon for parallel recognition.
+    /// If MNN is already set to multi-threading, enabling this option may cause thread contention.
     pub fn with_parallel(mut self, enable: bool) -> Self {
         self.enable_parallel = enable;
         self
     }
 
-    /// 设置结果级别的最小置信度阈值
+    /// Set minimum confidence threshold at result level
     ///
-    /// 低于此阈值的识别结果将被过滤掉。
-    /// 建议值：0.5 (宽松), 0.7 (平衡), 0.9 (严格)
+    /// Recognition results below this threshold will be filtered out.
+    /// Recommended values: 0.5 (lenient), 0.7 (balanced), 0.9 (strict)
     pub fn with_min_result_confidence(mut self, threshold: f32) -> Self {
         self.min_result_confidence = threshold;
         self
     }
 
-    /// 快速模式预设
+    /// Fast mode preset
     pub fn fast() -> Self {
         Self {
             precision_mode: PrecisionMode::Low,
@@ -131,7 +129,7 @@ impl OcrEngineConfig {
         }
     }
 
-    /// GPU 模式预设 (Metal)
+    /// GPU mode preset (Metal)
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn gpu() -> Self {
         Self {
@@ -140,7 +138,7 @@ impl OcrEngineConfig {
         }
     }
 
-    /// GPU 模式预设 (OpenCL)
+    /// GPU mode preset (OpenCL)
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub fn gpu() -> Self {
         Self {
@@ -159,16 +157,16 @@ impl OcrEngineConfig {
     }
 }
 
-/// OCR 引擎
+/// OCR engine
 ///
-/// 封装完整的 OCR 流程，包括文本检测和识别
+/// Encapsulates complete OCR pipeline, including text detection and recognition
 ///
-/// # 示例
+/// # Example
 ///
 /// ```ignore
 /// use ocr_rs::{OcrEngine, OcrEngineConfig};
 ///
-/// // 创建引擎
+/// // Create engine
 /// let engine = OcrEngine::new(
 ///     "det_model.mnn",
 ///     "rec_model.mnn",
@@ -176,7 +174,7 @@ impl OcrEngineConfig {
 ///     None,
 /// )?;
 ///
-/// // 识别图像
+/// // Recognize image
 /// let image = image::open("test.jpg")?;
 /// let results = engine.recognize(&image)?;
 ///
@@ -191,13 +189,13 @@ pub struct OcrEngine {
 }
 
 impl OcrEngine {
-    /// 从模型文件创建 OCR 引擎
+    /// Create OCR engine from model files
     ///
-    /// # 参数
-    /// - `det_model_path`: 检测模型文件路径
-    /// - `rec_model_path`: 识别模型文件路径
-    /// - `charset_path`: 字符集文件路径
-    /// - `config`: 可选的引擎配置
+    /// # Parameters
+    /// - `det_model_path`: Detection model file path
+    /// - `rec_model_path`: Recognition model file path
+    /// - `charset_path`: Charset file path
+    /// - `config`: Optional engine configuration
     pub fn new(
         det_model_path: impl AsRef<Path>,
         rec_model_path: impl AsRef<Path>,
@@ -207,7 +205,7 @@ impl OcrEngine {
         let config = config.unwrap_or_default();
         let inference_config = config.to_inference_config();
 
-        // 优化：直接移动配置，避免多次克隆
+        // Optimization: Directly move the configuration to avoid multiple clones
         let det_options = config.det_options.clone();
         let rec_options = config.rec_options.clone();
 
@@ -224,7 +222,7 @@ impl OcrEngine {
         })
     }
 
-    /// 从模型字节创建 OCR 引擎
+    /// Create OCR engine from model bytes
     pub fn from_bytes(
         det_model_bytes: &[u8],
         rec_model_bytes: &[u8],
@@ -234,7 +232,7 @@ impl OcrEngine {
         let config = config.unwrap_or_default();
         let inference_config = config.to_inference_config();
 
-        // 优化：直接移动配置，避免多次克隆
+        // Optimization: Directly move the configuration to avoid multiple clones
         let det_options = config.det_options.clone();
         let rec_options = config.rec_options.clone();
 
@@ -255,7 +253,7 @@ impl OcrEngine {
         })
     }
 
-    /// 只创建检测引擎
+    /// Create detection-only engine
     pub fn det_only(
         det_model_path: impl AsRef<Path>,
         config: Option<OcrEngineConfig>,
@@ -269,7 +267,7 @@ impl OcrEngine {
         Ok(DetOnlyEngine { det_model })
     }
 
-    /// 只创建识别引擎
+    /// Create recognition-only engine
     pub fn rec_only(
         rec_model_path: impl AsRef<Path>,
         charset_path: impl AsRef<Path>,
@@ -284,40 +282,40 @@ impl OcrEngine {
         Ok(RecOnlyEngine { rec_model })
     }
 
-    /// 执行完整的 OCR 识别
+    /// Perform complete OCR recognition
     ///
-    /// # 参数
-    /// - `image`: 输入图像
+    /// # Parameters
+    /// - `image`: Input image
     ///
-    /// # 返回
-    /// OCR 结果列表，每个结果包含文本、置信度和边界框
+    /// # Returns
+    /// List of OCR results, each result contains text, confidence and bounding box
     pub fn recognize(&self, image: &DynamicImage) -> OcrResult<Vec<OcrResult_>> {
-        // 1. 检测文本区域
+        // 1. Detect text regions
         let detections = self.det_model.detect_and_crop(image)?;
 
         if detections.is_empty() {
             return Ok(Vec::new());
         }
 
-        // 2. 批量识别（避免克隆）
+        // 2. Batch recognition (avoid cloning)
         let (images, boxes): (Vec<&DynamicImage>, Vec<TextBox>) = detections
             .iter()
             .map(|(img, bbox)| (img, bbox.clone()))
             .unzip();
 
         let rec_results = if self.config.enable_parallel && images.len() > 4 {
-            // 并行识别：对于多个文本区域，使用 rayon 并行处理
+            // Parallel recognition: for multiple text regions, use rayon for parallel processing
             use rayon::prelude::*;
             images
                 .par_iter()
                 .map(|img| self.rec_model.recognize(img))
                 .collect::<OcrResult<Vec<_>>>()?
         } else {
-            // 序列识别：使用批量推理
+            // Sequential recognition: use batch inference
             self.rec_model.recognize_batch_ref(&images)?
         };
 
-        // 3. 组合结果并过滤低置信度
+        // 3. Combine results and filter low confidence
         let results: Vec<OcrResult_> = rec_results
             .into_iter()
             .zip(boxes)
@@ -330,89 +328,89 @@ impl OcrEngine {
         Ok(results)
     }
 
-    /// 只执行检测
+    /// Perform detection only
     pub fn detect(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
         self.det_model.detect(image)
     }
 
-    /// 只执行识别 (需要预先裁剪好的文本行图像)
+    /// Perform recognition only (requires pre-cropped text line images)
     pub fn recognize_text(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
         self.rec_model.recognize(image)
     }
 
-    /// 批量识别文本行图像
+    /// Batch recognize text line images
     pub fn recognize_batch(&self, images: &[DynamicImage]) -> OcrResult<Vec<RecognitionResult>> {
         self.rec_model.recognize_batch(images)
     }
 
-    /// 获取检测模型引用
+    /// Get detection model reference
     pub fn det_model(&self) -> &DetModel {
         &self.det_model
     }
 
-    /// 获取识别模型引用
+    /// Get recognition model reference
     pub fn rec_model(&self) -> &RecModel {
         &self.rec_model
     }
 
-    /// 获取配置
+    /// Get configuration
     pub fn config(&self) -> &OcrEngineConfig {
         &self.config
     }
 }
 
-/// 只有检测功能的引擎
+/// Detection-only engine
 pub struct DetOnlyEngine {
     det_model: DetModel,
 }
 
 impl DetOnlyEngine {
-    /// 检测图像中的文本区域
+    /// Detect text regions in image
     pub fn detect(&self, image: &DynamicImage) -> OcrResult<Vec<TextBox>> {
         self.det_model.detect(image)
     }
 
-    /// 检测并返回裁剪后的图像
+    /// Detect and return cropped images
     pub fn detect_and_crop(&self, image: &DynamicImage) -> OcrResult<Vec<(DynamicImage, TextBox)>> {
         self.det_model.detect_and_crop(image)
     }
 
-    /// 获取检测模型引用
+    /// Get detection model reference
     pub fn model(&self) -> &DetModel {
         &self.det_model
     }
 }
 
-/// 只有识别功能的引擎
+/// Recognition-only engine
 pub struct RecOnlyEngine {
     rec_model: RecModel,
 }
 
 impl RecOnlyEngine {
-    /// 识别单张图像
+    /// Recognize a single image
     pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
         self.rec_model.recognize(image)
     }
 
-    /// 只返回文本
+    /// Return text only
     pub fn recognize_text(&self, image: &DynamicImage) -> OcrResult<String> {
         self.rec_model.recognize_text(image)
     }
 
-    /// 批量识别
+    /// Batch recognition
     pub fn recognize_batch(&self, images: &[DynamicImage]) -> OcrResult<Vec<RecognitionResult>> {
         self.rec_model.recognize_batch(images)
     }
 
-    /// 获取识别模型引用
+    /// Get recognition model reference
     pub fn model(&self) -> &RecModel {
         &self.rec_model
     }
 }
 
-/// 便捷函数：从文件识别
+/// Convenience function: recognize from file
 ///
-/// # 示例
+/// # Example
 ///
 /// ```ignore
 /// let results = ocr_rs::ocr_file(

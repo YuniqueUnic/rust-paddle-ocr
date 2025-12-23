@@ -3,6 +3,12 @@ use std::process::Command;
 use std::{env, fs};
 
 fn main() {
+    // 在 docs.rs 构建环境中，跳过所有 C++ 编译
+    if env::var("DOCS_RS").is_ok() || env::var("CARGO_FEATURE_DOCSRS").is_ok() {
+        println!("cargo:warning=Building for docs.rs, skipping C++ compilation");
+        return;
+    }
+
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap();

@@ -4,7 +4,7 @@ use ocr_rs::{DetModel, DetOptions, DetPrecisionMode, RecModel, RecOptions};
 use std::time::Duration;
 
 fn setup() -> (DetModel, RecModel, DynamicImage) {
-    // 加载模型 - 在性能测试前完成
+    // Load models - Complete before performance testing
     let det = DetModel::from_file("./models/ch_PP-OCRv4_det_infer.mnn", None)
         .expect("Failed to load detection model")
         .with_options(
@@ -23,7 +23,7 @@ fn setup() -> (DetModel, RecModel, DynamicImage) {
     .expect("Failed to load recognition model")
     .with_options(RecOptions::new());
 
-    // 加载测试图片 - 在性能测试前完成
+    // Load test image - Complete before performance testing
     let img = image::open("./res/1.png").expect("Failed to load test image");
 
     (det, rec, img)
@@ -47,7 +47,7 @@ fn bench_detection(c: &mut Criterion) {
 fn bench_recognition(c: &mut Criterion) {
     let (det, rec, img) = setup();
 
-    // 先检测文本区域并裁剪
+    // First detect text areas and crop
     let detections = det
         .detect_and_crop(&img)
         .expect("Failed to detect and crop text images");
@@ -57,7 +57,7 @@ fn bench_recognition(c: &mut Criterion) {
 
     group.bench_function("rec_model", |b| {
         b.iter(|| {
-            // 仅测试第一个文本区域的识别，如果没有文本区域则跳过
+            // Only test the recognition of the first text area, skip if there is no text area
             if let Some((text_img, _)) = detections.first() {
                 rec.recognize(text_img).expect("Recognition failed");
             }

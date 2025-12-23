@@ -1,58 +1,56 @@
-//! OCR 错误类型定义
-//!
-//! OCR Error Type Definitions
+//! OCR error type definitions
 
 use thiserror::Error;
 
 use crate::mnn::MnnError;
 
-/// OCR 错误类型
+/// OCR error type
 #[derive(Error, Debug)]
 pub enum OcrError {
-    /// MNN 推理引擎错误
-    #[error("MNN 推理错误: {0}")]
+    /// MNN inference engine error
+    #[error("MNN inference error: {0}")]
     MnnError(#[from] MnnError),
 
-    /// 图像处理错误
-    #[error("图像处理错误: {0}")]
+    /// Image processing error
+    #[error("Image processing error: {0}")]
     ImageError(#[from] image::ImageError),
 
-    /// IO 错误
-    #[error("IO 错误: {0}")]
+    /// IO error
+    #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
-    /// 无效参数错误
-    #[error("无效参数: {0}")]
+    /// Invalid parameter error
+    #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
 
-    /// 模型加载错误
-    #[error("模型加载失败: {0}")]
+    /// Model loading error
+    #[error("Model loading failed: {0}")]
     ModelLoadError(String),
 
-    /// 预处理错误
-    #[error("预处理错误: {0}")]
+    /// Preprocessing error
+    #[error("Preprocessing error: {0}")]
     PreprocessError(String),
 
-    /// 后处理错误
-    #[error("后处理错误: {0}")]
+    /// Postprocessing error
+    #[error("Postprocessing error: {0}")]
     PostprocessError(String),
 
-    /// 检测错误
-    #[error("检测错误: {0}")]
+    /// Detection error
+    #[error("Detection error: {0}")]
     DetectionError(String),
 
-    /// 识别错误
-    #[error("识别错误: {0}")]
+    /// Recognition error
+    #[error("Recognition error: {0}")]
     RecognitionError(String),
 
-    /// 未初始化错误
-    #[error("未初始化: {0}")]
+    /// Not initialized error
+    #[error("Not initialized: {0}")]
     NotInitialized(String),
 
-    /// 字符集解析错误
-    #[error("字符集解析错误: {0}")]
+    /// Charset parsing error
+    #[error("Charset parsing error: {0}")]
     CharsetError(String),
 }
 
-/// OCR 结果类型别名
+/// OCR result type alias
 pub type OcrResult<T> = std::result::Result<T, OcrError>;
