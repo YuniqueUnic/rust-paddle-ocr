@@ -4,9 +4,10 @@
 
 一个基于PaddleOCR模型的轻量级高效OCR（光学字符识别）Rust库。该库利用MNN推理框架提供高性能的文本检测和识别功能。
 
-**本项目是纯Rust库**，专注于提供OCR核心功能。如需命令行工具或HTTP服务，请参考：
+**本项目是纯Rust库**，专注于提供OCR核心功能。如需命令行工具或其他语言绑定，请参考：
 - 🖥️ **命令行工具**：[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
-- 🌐 **HTTP服务**：[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)
+- 🔌 **C API绑定**：[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi) - 提供C API以方便与其他编程语言集成
+- 🌐 **HTTP服务**：[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service) ⚠️ (施工中)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -538,7 +539,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## 相关项目
 
 - 🖥️ **[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)** - 基于本库的命令行工具，提供简单易用的OCR命令行接口
-- 🌐 **[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)** - 基于本库的HTTP服务，提供RESTful API接口
+- 🔌 **[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)** - 提供C API绑定，方便其他编程语言（Python、Node.js、Go等）集成
+- 🌐 **[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)** - 基于本库的HTTP服务，提供RESTful API接口 ⚠️ (施工中)
 
 ## 性能优化建议
 

@@ -4,9 +4,10 @@
 
 PaddleOCR 모델을 기반으로 한 경량 고효율 OCR(광학 문자 인식) Rust 라이브러리입니다. 이 라이브러리는 MNN 추론 프레임워크를 활용하여 고성능 텍스트 검출 및 인식 기능을 제공합니다.
 
-**이 프로젝트는 순수 Rust 라이브러리이며**, OCR 핵심 기능 제공에 중점을 둡니다. 명령줄 도구(CLI)나 HTTP 서비스가 필요한 경우 다음을 참조하세요:
+**이 프로젝트는 순수 Rust 라이브러리이며**, OCR 핵심 기능 제공에 중점을 둡니다. 명령줄 도구나 다른 언어 바인딩이 필요한 경우 다음을 참조하세요:
 - 🖥️ **명령줄 도구**: [newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
-- 🌐 **HTTP 서비스**: [newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)
+- 🔌 **C API 바인딩**: [paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi) - 다른 프로그래밍 언어와의 통합을 용이하게 하는 C API 제공
+- 🌐 **HTTP 서비스**: [newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service) ⚠️ (개발 중)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -536,7 +537,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## 관련 프로젝트
 
 - 🖥️ **[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)** - 이 라이브러리를 기반으로 한 명령줄 도구로, 간단하고 사용하기 쉬운 OCR CLI 인터페이스를 제공합니다.
-- 🌐 **[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)** - 이 라이브러리를 기반으로 한 HTTP 서비스로, RESTful API 인터페이스를 제공합니다.
+- 🔌 **[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)** - C API 바인딩. 다른 프로그래밍 언어(Python, Node.js, Go 등)와의 통합을 용이하게 합니다.
+- 🌐 **[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)** - 이 라이브러리를 기반으로 한 HTTP 서비스로, RESTful API 인터페이스를 제공합니다. ⚠️ (개발 중)
 
 ## 성능 최적화 제안
 

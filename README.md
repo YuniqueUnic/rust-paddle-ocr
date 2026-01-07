@@ -4,9 +4,10 @@
 
 A lightweight and efficient OCR (Optical Character Recognition) Rust library based on PaddleOCR models. This library utilizes the MNN inference framework to provide high-performance text detection and recognition capabilities.
 
-**This project is a pure Rust library**, focused on providing core OCR functionality. For command-line tools or HTTP services, please refer to:
+**This project is a pure Rust library**, focused on providing core OCR functionality. For command-line tools or other language bindings, please refer to:
 - 🖥️ **Command Line Tool**: [newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
-- 🌐 **HTTP Service**: [newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)
+- 🔌 **C API Bindings**: [paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi) - Provides C API for easy integration with other programming languages
+- 🌐 **HTTP Service**: [newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service) ⚠️ (Under construction)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -536,7 +537,8 @@ For more complete examples, please refer to the [examples](../examples) director
 ## Related Projects
 
 - 🖥️ **[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)** - A command-line tool based on this library, providing a simple and easy-to-use OCR CLI interface.
-- 🌐 **[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)** - An HTTP service based on this library, providing RESTful API interfaces.
+- 🔌 **[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)** - C API bindings for this library, enabling easy integration with other programming languages (Python, Node.js, Go, etc.).
+- 🌐 **[newbee-ocr-service](https://github.com/zibo-chen/newbee-ocr-service)** - An HTTP service based on this library, providing RESTful API interfaces. ⚠️ (Under construction)
 
 ## Performance Optimization Suggestions
 
