@@ -229,8 +229,13 @@ fn build_mnn_with_cmake(
     }
 
     // SIMD optimizations
-    if matches!(arch, "x86" | "x86_64") && os != "android" {
+    // Only enable SSE for x86_64, not for 32-bit x86 (i686)
+    // because i686 target doesn't have guaranteed SSE support
+    if arch == "x86_64" && os != "android" {
         config.define("MNN_USE_SSE", "ON");
+    } else if arch == "x86" && os != "android" {
+        // For 32-bit x86, disable SSE to avoid compilation issues
+        config.define("MNN_USE_SSE", "OFF");
     }
 
     // CoreML (macOS/iOS only)
