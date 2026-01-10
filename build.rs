@@ -150,6 +150,9 @@ fn build_mnn_with_cmake(
 
     // For Windows, always use Release mode to ensure consistent CRT linking
     if os == "windows" {
+        // Force NMake Makefiles generator on Windows to avoid MSVC detection issues
+        // This is more reliable in CI/CD environments like Jenkins
+        config.generator("NMake Makefiles");
         config.define("CMAKE_BUILD_TYPE", "Release");
         // Check if we're using static CRT
         if env::var("CARGO_CFG_TARGET_FEATURE").map_or(false, |f| f.contains("crt-static")) {
@@ -162,10 +165,6 @@ fn build_mnn_with_cmake(
             config.define("CMAKE_CXX_FLAGS_RELEASE", "/MT /O2 /Ob2 /DNDEBUG");
             config.define("CMAKE_C_FLAGS", "/MT");
             config.define("CMAKE_CXX_FLAGS", "/MT");
-        }
-        // For 32-bit Windows, ensure proper configuration
-        if arch == "x86" {
-            config.define("CMAKE_GENERATOR_PLATFORM", "Win32");
         }
     } else {
         // For non-Windows platforms, respect debug flag
@@ -231,11 +230,15 @@ fn build_mnn_with_cmake(
     // SIMD optimizations
     // Only enable SSE for x86_64, not for 32-bit x86 (i686)
     // because i686 target doesn't have guaranteed SSE support
-    if arch == "x86_64" && os != "android" {
+    if arch == "x86_64" && os != "android" && os != "ios" {
         config.define("MNN_USE_SSE", "ON");
-    } else if arch == "x86" && os != "android" {
-        // For 32-bit x86, disable SSE to avoid compilation issues
+    } else {
+        // For all other architectures (including 32-bit x86/i686), disable SSE/AVX
+        // This prevents compilation errors with SIMD intrinsics on incompatible targets
         config.define("MNN_USE_SSE", "OFF");
+        config.define("MNN_USE_AVX", "OFF");
+        config.define("MNN_USE_AVX2", "OFF");
+        config.define("MNN_USE_AVX512", "OFF");
     }
 
     // CoreML (macOS/iOS only)
