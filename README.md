@@ -457,6 +457,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Document Orientation Model (Builder)
+
+```rust
+use ocr_rs::OcrEngineBuilder;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let engine = OcrEngineBuilder::new()
+        .with_det_model_path("models/PP-OCRv5_mobile_det.mnn")
+        .with_rec_model_path("models/PP-OCRv5_mobile_rec.mnn")
+        .with_charset_path("models/ppocr_keys_v5.txt")
+        .with_ori_model_path("models/PP-LCNet_x1_0_doc_ori.mnn")
+        .build()?;
+
+    Ok(())
+}
+```
+
 ### Using Specific Language Models
 
 ```rust

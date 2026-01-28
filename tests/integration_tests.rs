@@ -120,7 +120,8 @@ fn test_ocr_engine_with_config() {
         .with_det_options(DetOptions::fast())
         .with_rec_options(RecOptions::new().with_min_score(0.3));
 
-    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
+    let engine =
+        OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
     assert!(engine.is_ok(), "配置 OCR 引擎失败: {:?}", engine.err());
 }
 
