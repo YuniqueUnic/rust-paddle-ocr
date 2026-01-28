@@ -3,10 +3,10 @@
 //! Provides complete OCR pipeline encapsulation, performs detection and recognition in one call
 
 use image::DynamicImage;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::det::{DetModel, DetOptions};
-use crate::error::OcrResult;
+use crate::error::{OcrError, OcrResult};
 use crate::mnn::{Backend, InferenceConfig, PrecisionMode};
 use crate::postprocess::TextBox;
 use crate::ori::{OriModel, OriOptions};
@@ -191,7 +191,6 @@ impl OcrEngineConfig {
 ///     "rec_model.mnn",
 ///     "ppocr_keys.txt",
 ///     None,
-///     None,
 /// )?;
 ///
 /// // Recognize image
@@ -210,18 +209,10 @@ pub struct OcrEngine {
 }
 
 impl OcrEngine {
-    /// Create OCR engine from model files
-    ///
-    /// # Parameters
-    /// - `det_model_path`: Detection model file path
-    /// - `rec_model_path`: Recognition model file path
-    /// - `charset_path`: Charset file path
-    /// - `ori_model_path`: Optional orientation model file path
-    /// - `config`: Optional engine configuration
-    pub fn new(
-        det_model_path: impl AsRef<Path>,
-        rec_model_path: impl AsRef<Path>,
-        charset_path: impl AsRef<Path>,
+    fn build_with_paths(
+        det_model_path: &Path,
+        rec_model_path: &Path,
+        charset_path: &Path,
         ori_model_path: Option<&Path>,
         config: Option<OcrEngineConfig>,
     ) -> OcrResult<Self> {
@@ -255,6 +246,28 @@ impl OcrEngine {
         })
     }
 
+    /// Create OCR engine from model files
+    ///
+    /// # Parameters
+    /// - `det_model_path`: Detection model file path
+    /// - `rec_model_path`: Recognition model file path
+    /// - `charset_path`: Charset file path
+    /// - `config`: Optional engine configuration
+    pub fn new(
+        det_model_path: impl AsRef<Path>,
+        rec_model_path: impl AsRef<Path>,
+        charset_path: impl AsRef<Path>,
+        config: Option<OcrEngineConfig>,
+    ) -> OcrResult<Self> {
+        Self::build_with_paths(
+            det_model_path.as_ref(),
+            rec_model_path.as_ref(),
+            charset_path.as_ref(),
+            None,
+            config,
+        )
+    }
+
     /// Create OCR engine from model files with orientation model
     pub fn new_with_ori(
         det_model_path: impl AsRef<Path>,
@@ -263,10 +276,10 @@ impl OcrEngine {
         ori_model_path: impl AsRef<Path>,
         config: Option<OcrEngineConfig>,
     ) -> OcrResult<Self> {
-        Self::new(
-            det_model_path,
-            rec_model_path,
-            charset_path,
+        Self::build_with_paths(
+            det_model_path.as_ref(),
+            rec_model_path.as_ref(),
+            charset_path.as_ref(),
             Some(ori_model_path.as_ref()),
             config,
         )
@@ -277,13 +290,44 @@ impl OcrEngine {
         det_model_bytes: &[u8],
         rec_model_bytes: &[u8],
         charset_bytes: &[u8],
-        ori_model_bytes: Option<&[u8]>,
         config: Option<OcrEngineConfig>,
     ) -> OcrResult<Self> {
         let config = config.unwrap_or_default();
         let inference_config = config.to_inference_config();
 
         // Optimization: Directly move the configuration to avoid multiple clones
+        let det_options = config.det_options.clone();
+        let rec_options = config.rec_options.clone();
+
+        let det_model = DetModel::from_bytes(det_model_bytes, Some(inference_config.clone()))?
+            .with_options(det_options);
+
+        let rec_model = RecModel::from_bytes_with_charset(
+            rec_model_bytes,
+            charset_bytes,
+            Some(inference_config.clone()),
+        )?
+        .with_options(rec_options);
+
+        Ok(Self {
+            det_model,
+            rec_model,
+            ori_model: None,
+            config,
+        })
+    }
+
+    /// Create OCR engine from model bytes with orientation model
+    pub fn from_bytes_with_ori(
+        det_model_bytes: &[u8],
+        rec_model_bytes: &[u8],
+        charset_bytes: &[u8],
+        ori_model_bytes: &[u8],
+        config: Option<OcrEngineConfig>,
+    ) -> OcrResult<Self> {
+        let config = config.unwrap_or_default();
+        let inference_config = config.to_inference_config();
+
         let det_options = config.det_options.clone();
         let rec_options = config.rec_options.clone();
         let ori_options = config.ori_options.clone();
@@ -298,36 +342,15 @@ impl OcrEngine {
         )?
         .with_options(rec_options);
 
-        let ori_model = match ori_model_bytes {
-            Some(bytes) => Some(
-                OriModel::from_bytes(bytes, Some(inference_config))?.with_options(ori_options),
-            ),
-            None => None,
-        };
+        let ori_model = OriModel::from_bytes(ori_model_bytes, Some(inference_config))?
+            .with_options(ori_options);
 
         Ok(Self {
             det_model,
             rec_model,
-            ori_model,
+            ori_model: Some(ori_model),
             config,
         })
-    }
-
-    /// Create OCR engine from model bytes with orientation model
-    pub fn from_bytes_with_ori(
-        det_model_bytes: &[u8],
-        rec_model_bytes: &[u8],
-        charset_bytes: &[u8],
-        ori_model_bytes: &[u8],
-        config: Option<OcrEngineConfig>,
-    ) -> OcrResult<Self> {
-        Self::from_bytes(
-            det_model_bytes,
-            rec_model_bytes,
-            charset_bytes,
-            Some(ori_model_bytes),
-            config,
-        )
     }
 
     /// Create detection-only engine
@@ -466,6 +489,79 @@ impl OcrEngine {
     }
 }
 
+/// Builder for OCR engine
+pub struct OcrEngineBuilder {
+    det_model_path: Option<PathBuf>,
+    rec_model_path: Option<PathBuf>,
+    charset_path: Option<PathBuf>,
+    ori_model_path: Option<PathBuf>,
+    config: Option<OcrEngineConfig>,
+}
+
+impl OcrEngineBuilder {
+    /// Create a new builder
+    pub fn new() -> Self {
+        Self {
+            det_model_path: None,
+            rec_model_path: None,
+            charset_path: None,
+            ori_model_path: None,
+            config: None,
+        }
+    }
+
+    /// Set detection model path
+    pub fn with_det_model_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.det_model_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Set recognition model path
+    pub fn with_rec_model_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.rec_model_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Set charset path
+    pub fn with_charset_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.charset_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Set orientation model path
+    pub fn with_ori_model_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.ori_model_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Set engine configuration
+    pub fn with_config(mut self, config: OcrEngineConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Build OCR engine
+    pub fn build(self) -> OcrResult<OcrEngine> {
+        let det_model_path = self.det_model_path.ok_or_else(|| {
+            OcrError::InvalidParameter("Missing det_model_path".to_string())
+        })?;
+        let rec_model_path = self.rec_model_path.ok_or_else(|| {
+            OcrError::InvalidParameter("Missing rec_model_path".to_string())
+        })?;
+        let charset_path = self.charset_path.ok_or_else(|| {
+            OcrError::InvalidParameter("Missing charset_path".to_string())
+        })?;
+
+        OcrEngine::build_with_paths(
+            det_model_path.as_path(),
+            rec_model_path.as_path(),
+            charset_path.as_path(),
+            self.ori_model_path.as_deref(),
+            self.config,
+        )
+    }
+}
+
 /// Detection-only engine
 pub struct DetOnlyEngine {
     det_model: DetModel,
@@ -534,7 +630,7 @@ pub fn ocr_file(
     charset_path: impl AsRef<Path>,
 ) -> OcrResult<Vec<OcrResult_>> {
     let image = image::open(image_path)?;
-    let engine = OcrEngine::new(det_model_path, rec_model_path, charset_path, None, None)?;
+    let engine = OcrEngine::new(det_model_path, rec_model_path, charset_path, None)?;
     engine.recognize(&image)
 }
 

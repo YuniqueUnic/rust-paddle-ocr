@@ -104,7 +104,7 @@ fn test_ocr_engine_creation() {
         return;
     }
 
-    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, None, None);
+    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, None);
     assert!(engine.is_ok(), "OCR 引擎创建失败: {:?}", engine.err());
 }
 
@@ -121,7 +121,7 @@ fn test_ocr_engine_with_config() {
         .with_rec_options(RecOptions::new().with_min_score(0.3));
 
     let engine =
-        OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, None, Some(config));
+        OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
     assert!(engine.is_ok(), "配置 OCR 引擎失败: {:?}", engine.err());
 }
 
@@ -138,7 +138,6 @@ fn test_ocr_engine_presets() {
         DET_MODEL_PATH,
         REC_MODEL_PATH,
         CHARSET_PATH,
-        None,
         Some(fast_config),
     );
     assert!(engine.is_ok(), "快速模式创建失败");
@@ -220,7 +219,7 @@ fn test_full_ocr_pipeline() {
         return;
     }
 
-    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, None, None).unwrap();
+    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, None).unwrap();
     let image = image::open(TEST_IMAGE_PATH).unwrap();
 
     let results = engine.recognize(&image);

@@ -30,7 +30,7 @@ fn benchmark_backend(
     // 创建引擎
     print!("创建引擎... ");
     let create_start = Instant::now();
-    let engine = OcrEngine::new(det_model, rec_model, charset, None, Some(config))?;
+    let engine = OcrEngine::new(det_model, rec_model, charset, Some(config))?;
     let create_time = create_start.elapsed();
     println!("完成 ({:?})", create_time);
 
