@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("创建 OCR 引擎...");
     let create_start = Instant::now();
 
-    let engine = OcrEngine::new(det_model_path, rec_model_path, charset_path, Some(config))?;
+    let engine = OcrEngine::new(det_model_path, rec_model_path, charset_path, None, Some(config))?;
 
     let create_time = create_start.elapsed();
     println!("引擎创建耗时: {:?}\n", create_time);

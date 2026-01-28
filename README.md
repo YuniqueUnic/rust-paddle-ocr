@@ -132,7 +132,7 @@ Suitable for:
 - Only care about the final text result.
 
 ```rust
-let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
+let engine = OcrEngine::new(det_path, rec_path, charset_path, None, None)?;
 let results = engine.recognize(&image)?;
 ```
 
@@ -146,7 +146,7 @@ Suitable for:
 - Sorting or grouping detection boxes.
 
 ```rust
-let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
+let engine = OcrEngine::new(det_path, rec_path, charset_path, None, None)?;
 // 1. Detect
 let mut boxes = engine.detect(&image)?;
 // 2. Custom processing (e.g., filter small boxes)
@@ -286,6 +286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "models/PP-OCRv5_mobile_rec.mnn",
         "models/ppocr_keys_v5.txt",
         None,
+        None,
     )?;
     
     // Load image
@@ -313,7 +314,7 @@ Use `OcrEngine` but call detection and recognition separately. Useful for insert
 use ocr_rs::OcrEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let engine = OcrEngine::new(det_path, rec_path, charset_path, None)?;
+    let engine = OcrEngine::new(det_path, rec_path, charset_path, None, None)?;
     let image = image::open("test.jpg")?;
     
     // 1. Detection only first
@@ -402,6 +403,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "models/PP-OCRv5_mobile_det.mnn",
         "models/PP-OCRv5_mobile_rec.mnn",
         "models/ppocr_keys_v5.txt",
+        None,
         Some(config),
     )?;
     
@@ -424,7 +426,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // .with_backend(Backend::OpenCL); // Cross-platform: OpenCL
         // .with_backend(Backend::Vulkan); // Windows/Linux: Vulkan
     
-    let engine = OcrEngine::new(det_path, rec_path, charset_path, Some(config))?;
+    let engine = OcrEngine::new(det_path, rec_path, charset_path, None, Some(config))?;
     
     Ok(())
 }
@@ -451,7 +453,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_batch_size(16)         // Batch recognition size
         );
     
-    let engine = OcrEngine::new(det_path, rec_path, charset_path, Some(config))?;
+    let engine = OcrEngine::new(det_path, rec_path, charset_path, None, Some(config))?;
     
     Ok(())
 }
@@ -468,6 +470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "models/PP-OCRv5_mobile_det.mnn",
         "models/korean_PP-OCRv5_mobile_rec_infer.mnn",
         "models/ppocr_keys_korean.txt",
+        None,
         None,
     )?;
     
@@ -500,6 +503,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &det_bytes,
         &rec_bytes,
         &charset_bytes,
+        None,
         None,
     )?;
     

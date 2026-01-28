@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   字符集:   {}", keys_path);
 
     let config = OcrEngineConfig::fast().with_min_result_confidence(0.7);
-    let engine = OcrEngine::new(det_model, rec_model, keys_path, Some(config))?;
+    let engine = OcrEngine::new(det_model, rec_model, keys_path, None, Some(config))?;
     println!("   ✅ 模型加载成功");
 
     // 2. 加载图像

@@ -23,6 +23,7 @@
 //!         "models/det_model.mnn",
 //!         "models/rec_model.mnn",
 //!         "models/ppocr_keys.txt",
+//!         None, // Optional orientation model
 //!         None, // Use default config
 //!     )?;
 //!
@@ -78,7 +79,7 @@
 //!     .with_backend(Backend::Metal);  // macOS/iOS
 //!     // .with_backend(Backend::OpenCL);  // Cross-platform
 //!
-//! let engine = OcrEngine::new(det_path, rec_path, charset_path, Some(config))?;
+//! let engine = OcrEngine::new(det_path, rec_path, charset_path, None, Some(config))?;
 //! ```
 //!
 //! ## Module Structure
@@ -120,6 +121,7 @@ pub mod mnn;
 pub mod postprocess;
 pub mod preprocess;
 pub mod rec;
+mod ori;
 
 // Re-export commonly used types
 pub use det::{DetModel, DetOptions, DetPrecisionMode};
@@ -127,6 +129,7 @@ pub use engine::{ocr_file, DetOnlyEngine, OcrEngine, OcrEngineConfig, OcrResult_
 pub use error::{OcrError, OcrResult};
 pub use mnn::{Backend, InferenceConfig, InferenceEngine, PrecisionMode};
 pub use postprocess::TextBox;
+pub use ori::{OriModel, OriOptions, OriPreprocessMode, OrientationResult};
 pub use rec::{RecModel, RecOptions, RecognitionResult};
 
 /// Get library version
