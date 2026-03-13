@@ -250,6 +250,32 @@ This library requires:
 - Pre-trained PaddleOCR models converted to MNN format.
 - A character set file for text recognition.
 
+### MNN Linking Mode
+
+By default, MNN is built from source automatically. You can also use pre-built MNN libraries to speed up compilation:
+
+#### Use Pre-built Dynamic Library
+
+```bash
+MNN_LIB_DIR=/path/to/mnn/lib MNN_INCLUDE_DIR=/path/to/mnn/include \
+  cargo build --features mnn-dynamic
+```
+
+#### Use Pre-built Static Library
+
+```bash
+MNN_LIB_DIR=/path/to/mnn/lib MNN_INCLUDE_DIR=/path/to/mnn/include \
+  cargo build --features mnn-static
+```
+
+#### Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `MNN_LIB_DIR` | Yes (for `mnn-dynamic` / `mnn-static`) | Directory containing pre-built MNN library (`libMNN.so` / `libMNN.dylib` / `libMNN.a`) |
+| `MNN_INCLUDE_DIR` | No | Directory containing MNN headers. Falls back to `MNN_SOURCE_DIR/include` or `3rd_party/MNN/include` |
+| `MNN_SOURCE_DIR` | No | Path to MNN source tree (used for headers or building from source) |
+
 ## API Architecture
 
 This library provides a **Layered Inference API**, allowing you to choose the usage pattern that best fits your scenario:

@@ -2,6 +2,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
 
+/// MNN linking mode
+enum MnnLinkMode {
+    /// Build MNN from source (default)
+    BuildFromSource,
+    /// Use pre-built MNN dynamic library
+    Dynamic,
+    /// Use pre-built MNN static library
+    Static,
+}
+
 fn main() {
     // 在 docs.rs 构建环境中，跳过所有 C++ 编译
     if env::var("DOCS_RS").is_ok() || env::var("CARGO_FEATURE_DOCSRS").is_ok() {
@@ -22,32 +32,93 @@ fn main() {
     let opengl_enabled = env::var("CARGO_FEATURE_OPENGL").is_ok();
     let vulkan_enabled = env::var("CARGO_FEATURE_VULKAN").is_ok();
 
+    let mnn_dynamic = env::var("CARGO_FEATURE_MNN_DYNAMIC").is_ok();
+    let mnn_static = env::var("CARGO_FEATURE_MNN_STATIC").is_ok();
+
+    if mnn_dynamic && mnn_static {
+        panic!("Features `mnn-dynamic` and `mnn-static` are mutually exclusive. Please enable only one.");
+    }
+
+    let link_mode = if mnn_dynamic {
+        MnnLinkMode::Dynamic
+    } else if mnn_static {
+        MnnLinkMode::Static
+    } else {
+        MnnLinkMode::BuildFromSource
+    };
+
     let manifest_dir_path = PathBuf::from(&manifest_dir);
 
-    // Get or download MNN source code
-    let mnn_source_dir = get_mnn_source(&manifest_dir_path);
+    // Determine MNN include dir and library dir based on link mode
+    let (mnn_include_dir, mnn_lib_dir) = match &link_mode {
+        MnnLinkMode::BuildFromSource => {
+            // Get or download MNN source code
+            let mnn_source_dir = get_mnn_source(&manifest_dir_path);
 
-    // Build MNN using cmake
-    let dst = build_mnn_with_cmake(
-        &mnn_source_dir,
-        &arch,
-        &os,
-        &debug,
-        coreml_enabled,
-        metal_enabled,
-        cuda_enabled,
-        opencl_enabled,
-        opengl_enabled,
-        vulkan_enabled,
-    );
+            // Build MNN using cmake
+            let dst = build_mnn_with_cmake(
+                &mnn_source_dir,
+                &arch,
+                &os,
+                &debug,
+                coreml_enabled,
+                metal_enabled,
+                cuda_enabled,
+                opencl_enabled,
+                opengl_enabled,
+                vulkan_enabled,
+            );
 
-    // Build our C++ wrapper using cc
-    build_wrapper(&manifest_dir_path, &mnn_source_dir, &dst, &os);
+            // Include dirs: cmake output + MNN source
+            let include_dir = vec![dst.join("include"), mnn_source_dir.join("include")];
+            let lib_dir = vec![dst.clone(), dst.join("lib")];
+            (include_dir, lib_dir)
+        }
+        MnnLinkMode::Dynamic | MnnLinkMode::Static => {
+            let mode_name = if mnn_dynamic {
+                "mnn-dynamic"
+            } else {
+                "mnn-static"
+            };
+
+            // MNN_LIB_DIR is required for pre-built libraries
+            let lib_dir_str = env::var("MNN_LIB_DIR").unwrap_or_else(|_| {
+                panic!(
+                    "MNN_LIB_DIR environment variable is required when using `{}` feature.\n\
+                     Set it to the directory containing the pre-built MNN library.\n\
+                     Example: MNN_LIB_DIR=/usr/local/lib cargo build --features {}",
+                    mode_name, mode_name,
+                )
+            });
+            let lib_dir = PathBuf::from(&lib_dir_str);
+            if !lib_dir.exists() {
+                panic!("MNN_LIB_DIR='{}' does not exist", lib_dir.display());
+            }
+
+            // MNN_INCLUDE_DIR: look for it in env, or fall back to MNN source/3rd_party
+            let include_dirs = get_mnn_include_dirs(&manifest_dir_path);
+
+            println!("cargo:rerun-if-env-changed=MNN_LIB_DIR");
+            println!("cargo:rerun-if-env-changed=MNN_INCLUDE_DIR");
+
+            println!(
+                "cargo:warning=Using pre-built MNN {} library from: {}",
+                if mnn_dynamic { "dynamic" } else { "static" },
+                lib_dir.display()
+            );
+
+            (include_dirs, vec![lib_dir])
+        }
+    };
+
+    // Build our C++ wrapper using cc (always needed)
+    build_wrapper(&manifest_dir_path, &mnn_include_dir, &os);
 
     // Link libraries
     link_libraries(
-        &dst,
+        &mnn_lib_dir,
         &os,
+        &link_mode,
         coreml_enabled,
         metal_enabled,
         cuda_enabled,
@@ -57,7 +128,61 @@ fn main() {
     );
 
     // Generate Rust bindings
-    bind_gen(&manifest_dir_path, &mnn_source_dir, &dst, &os, &arch);
+    bind_gen(&manifest_dir_path, &mnn_include_dir, &os, &arch);
+}
+
+/// Get MNN include directories for pre-built library mode.
+/// Priority:
+/// 1. MNN_INCLUDE_DIR environment variable
+/// 2. MNN_SOURCE_DIR/include (if MNN_SOURCE_DIR is set)
+/// 3. Local 3rd_party/MNN/include
+fn get_mnn_include_dirs(manifest_dir: &PathBuf) -> Vec<PathBuf> {
+    // 1. Check MNN_INCLUDE_DIR
+    if let Ok(include_dir) = env::var("MNN_INCLUDE_DIR") {
+        let include_path = PathBuf::from(&include_dir);
+        if include_path.exists() {
+            println!(
+                "cargo:warning=Using MNN headers from MNN_INCLUDE_DIR: {}",
+                include_path.display()
+            );
+            return vec![include_path];
+        } else {
+            panic!(
+                "MNN_INCLUDE_DIR='{}' does not exist",
+                include_path.display()
+            );
+        }
+    }
+
+    // 2. Check MNN_SOURCE_DIR
+    if let Ok(mnn_dir) = env::var("MNN_SOURCE_DIR") {
+        let mnn_path = PathBuf::from(&mnn_dir);
+        let include_path = mnn_path.join("include");
+        if include_path.exists() {
+            println!(
+                "cargo:warning=Using MNN headers from MNN_SOURCE_DIR: {}",
+                include_path.display()
+            );
+            return vec![include_path];
+        }
+    }
+
+    // 3. Check local 3rd_party/MNN/include
+    let local_include = manifest_dir.join("3rd_party/MNN/include");
+    if local_include.exists() {
+        println!(
+            "cargo:warning=Using MNN headers from local source: {}",
+            local_include.display()
+        );
+        return vec![local_include];
+    }
+
+    panic!(
+        "MNN headers not found. Please set one of:\n\
+         - MNN_INCLUDE_DIR: path to directory containing MNN headers\n\
+         - MNN_SOURCE_DIR: path to MNN source tree\n\
+         Or ensure 3rd_party/MNN exists in the project root."
+    );
 }
 
 /// Get MNN source code directory
@@ -297,7 +422,7 @@ fn build_mnn_with_cmake(
     config.build()
 }
 
-fn build_wrapper(manifest_dir: &PathBuf, mnn_source_dir: &PathBuf, mnn_dst: &PathBuf, os: &str) {
+fn build_wrapper(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str) {
     let wrapper_file = manifest_dir.join("cpp/src/mnn_wrapper.cpp");
 
     println!("cargo:rerun-if-changed=cpp/src/mnn_wrapper.cpp");
@@ -308,9 +433,11 @@ fn build_wrapper(manifest_dir: &PathBuf, mnn_source_dir: &PathBuf, mnn_dst: &Pat
     build
         .cpp(true)
         .file(&wrapper_file)
-        .include(mnn_dst.join("include"))
-        .include(mnn_source_dir.join("include"))
         .include(manifest_dir.join("cpp/include"));
+
+    for inc in mnn_include_dirs {
+        build.include(inc);
+    }
 
     // Platform-specific C++ flags
     if os == "windows" {
@@ -323,8 +450,9 @@ fn build_wrapper(manifest_dir: &PathBuf, mnn_source_dir: &PathBuf, mnn_dst: &Pat
 }
 
 fn link_libraries(
-    mnn_dst: &PathBuf,
+    lib_dirs: &[PathBuf],
     os: &str,
+    link_mode: &MnnLinkMode,
     coreml_enabled: bool,
     metal_enabled: bool,
     cuda_enabled: bool,
@@ -333,14 +461,19 @@ fn link_libraries(
     vulkan_enabled: bool,
 ) {
     // Add library search paths
-    println!("cargo:rustc-link-search=native={}", mnn_dst.display());
-    println!(
-        "cargo:rustc-link-search=native={}",
-        mnn_dst.join("lib").display()
-    );
+    for dir in lib_dirs {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+    }
 
-    // Link MNN static library
-    println!("cargo:rustc-link-lib=static=MNN");
+    // Link MNN library based on mode
+    match link_mode {
+        MnnLinkMode::Dynamic => {
+            println!("cargo:rustc-link-lib=dylib=MNN");
+        }
+        MnnLinkMode::Static | MnnLinkMode::BuildFromSource => {
+            println!("cargo:rustc-link-lib=static=MNN");
+        }
+    }
 
     // Platform-specific C++ runtime
     match os {
@@ -410,13 +543,7 @@ fn link_libraries(
     }
 }
 
-fn bind_gen(
-    manifest_dir: &PathBuf,
-    mnn_source_dir: &PathBuf,
-    mnn_dst: &PathBuf,
-    os: &str,
-    arch: &str,
-) {
+fn bind_gen(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str, arch: &str) {
     let header_path = manifest_dir.join("cpp/include/mnn_wrapper.h");
 
     let mut builder = bindgen::Builder::default()
@@ -424,10 +551,12 @@ fn bind_gen(
         .allowlist_function("mnnr_.*")
         .allowlist_type("MNN.*")
         .allowlist_type("MNNR.*")
-        .clang_arg(format!("-I{}", mnn_dst.join("include").display()))
-        .clang_arg(format!("-I{}", mnn_source_dir.join("include").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false);
+
+    for inc in mnn_include_dirs {
+        builder = builder.clang_arg(format!("-I{}", inc.display()));
+    }
 
     // Android-specific clang target and sysroot
     if os == "android" {

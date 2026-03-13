@@ -252,6 +252,32 @@ branch = "main"
 - 转换为MNN格式的预训练PaddleOCR模型
 - 用于文本识别的字符集文件
 
+### MNN 链接方式
+
+默认情况下，MNN 会自动从源码编译。你也可以使用预编译的 MNN 库来加速编译：
+
+#### 使用预编译动态库
+
+```bash
+MNN_LIB_DIR=/path/to/mnn/lib MNN_INCLUDE_DIR=/path/to/mnn/include \
+  cargo build --features mnn-dynamic
+```
+
+#### 使用预编译静态库
+
+```bash
+MNN_LIB_DIR=/path/to/mnn/lib MNN_INCLUDE_DIR=/path/to/mnn/include \
+  cargo build --features mnn-static
+```
+
+#### 环境变量
+
+| 变量 | 是否必需 | 说明 |
+|---|---|---|
+| `MNN_LIB_DIR` | 是（使用 `mnn-dynamic` / `mnn-static` 时） | 包含预编译 MNN 库文件的目录（`libMNN.so` / `libMNN.dylib` / `libMNN.a`） |
+| `MNN_INCLUDE_DIR` | 否 | 包含 MNN 头文件的目录。未设置时回退到 `MNN_SOURCE_DIR/include` 或 `3rd_party/MNN/include` |
+| `MNN_SOURCE_DIR` | 否 | MNN 源码目录（用于获取头文件或从源码编译） |
+
 ## API 架构
 
 本库提供了**分层推理 API**，让您可以根据不同场景灵活选择使用方式：
