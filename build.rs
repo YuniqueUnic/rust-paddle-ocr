@@ -235,6 +235,17 @@ fn build_mnn_with_cmake(
         } else {
             config.define("CMAKE_OSX_SYSROOT", "iphoneos");
         }
+
+        // MNN's CMakeLists.txt only sets CMAKE_SYSTEM_PROCESSOR from
+        // CMAKE_OSX_ARCHITECTURES when CMAKE_SYSTEM_NAME == "Darwin",
+        // but for iOS it's "iOS". Without this, ARM assembly sources
+        // (NEON, AArch64) are not compiled, causing undefined symbols.
+        if arch == "aarch64" {
+            config.define("CMAKE_SYSTEM_PROCESSOR", "arm64");
+            config.define("ARCHS", "arm64");
+        } else if arch == "x86_64" {
+            config.define("CMAKE_SYSTEM_PROCESSOR", "x86_64");
+        }
     }
 
     // SIMD optimizations
