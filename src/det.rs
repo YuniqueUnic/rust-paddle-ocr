@@ -248,7 +248,7 @@ impl DetModel {
         let (scaled_width, scaled_height) = scaled.dimensions();
 
         // Preprocess
-        let input = preprocess_for_det(&scaled, &self.normalize_params);
+        let input = preprocess_for_det(&scaled, &self.normalize_params)?;
 
         // Inference (using dynamic shape)
         let output = self.engine.run_dynamic(input.view().into_dyn())?;

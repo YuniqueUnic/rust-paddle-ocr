@@ -240,7 +240,7 @@ impl OriModel {
         let (class_idx, &confidence) = scores
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .ok_or_else(|| {
                 OcrError::PostprocessError(
                     "Orientation model output has no valid scores".to_string(),
@@ -255,7 +255,10 @@ impl OriModel {
 /// Convert class index to angle in degrees (best effort mapping)
 fn class_to_angle(num_classes: usize, class_idx: usize, class_angles: &[i32]) -> i32 {
     if class_angles.len() == num_classes {
-        return class_angles.get(class_idx).copied().unwrap_or(class_idx as i32);
+        return class_angles
+            .get(class_idx)
+            .copied()
+            .unwrap_or(class_idx as i32);
     }
 
     match num_classes {
@@ -282,10 +285,7 @@ fn softmax(scores: &[f32]) -> Vec<f32> {
         return Vec::new();
     }
 
-    let max_score = scores
-        .iter()
-        .cloned()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let exp_scores: Vec<f32> = scores.iter().map(|&s| (s - max_score).exp()).collect();
     let sum_exp: f32 = exp_scores.iter().sum();
 
@@ -342,11 +342,7 @@ fn preprocess_for_ori(
             let scale = resize_shorter as f32 / shorter;
             let new_w = (w as f32 * scale).round().max(1.0) as u32;
             let new_h = (h as f32 * scale).round().max(1.0) as u32;
-            let resized = img.resize_exact(
-                new_w,
-                new_h,
-                image::imageops::FilterType::Lanczos3,
-            );
+            let resized = img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
 
             if new_w < target_width || new_h < target_height {
                 resized.resize_exact(
@@ -365,12 +361,7 @@ fn preprocess_for_ori(
     let rgb_img = processed.to_rgb8();
     let (proc_w, proc_h) = processed.dimensions();
 
-    let mut input = Array4::<f32>::zeros((
-        1,
-        3,
-        target_height as usize,
-        target_width as usize,
-    ));
+    let mut input = Array4::<f32>::zeros((1, 3, target_height as usize, target_width as usize));
 
     let max_y = proc_h.min(target_height) as usize;
     let max_x = proc_w.min(target_width) as usize;
@@ -458,15 +449,8 @@ mod tests {
     fn test_preprocess_for_ori_shape() {
         let img = DynamicImage::new_rgb8(100, 32);
         let params = NormalizeParams::paddle_det();
-        let tensor = preprocess_for_ori(
-            &img,
-            224,
-            224,
-            256,
-            OriPreprocessMode::Doc,
-            &params,
-        )
-        .unwrap();
+        let tensor =
+            preprocess_for_ori(&img, 224, 224, 256, OriPreprocessMode::Doc, &params).unwrap();
         assert_eq!(tensor.shape(), &[1, 3, 224, 224]);
     }
 }

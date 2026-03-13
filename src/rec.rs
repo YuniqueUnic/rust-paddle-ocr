@@ -234,7 +234,7 @@ impl RecModel {
     /// Recognition result
     pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
         // Preprocess
-        let input = preprocess_for_rec(image, self.options.target_height, &self.normalize_params);
+        let input = preprocess_for_rec(image, self.options.target_height, &self.normalize_params)?;
 
         // Inference (using dynamic shape)
         let output = self.engine.run_dynamic(input.view().into_dyn())?;
@@ -329,7 +329,7 @@ impl RecModel {
             images,
             self.options.target_height,
             &self.normalize_params,
-        );
+        )?;
 
         // Batch inference
         let batch_output = self.engine.run_dynamic(batch_input.view().into_dyn())?;
@@ -388,8 +388,10 @@ impl RecModel {
             let (max_idx, &max_prob) = probs
                 .iter()
                 .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .unwrap();
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .ok_or_else(|| {
+                    OcrError::PostprocessError("Empty probability slice in CTC decoding".into())
+                })?;
 
             // CTC decoding rule: skip blank (index 0) and duplicate characters
             if max_idx != 0 && max_idx != prev_idx {

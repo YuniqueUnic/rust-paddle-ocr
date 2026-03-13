@@ -48,7 +48,7 @@ fn main() {
     // 预处理
     let target_height = 48u32;
     let params = NormalizeParams::paddle_rec();
-    let input = preprocess_for_rec(&image, target_height, &params);
+    let input = preprocess_for_rec(&image, target_height, &params).expect("预处理失败");
     println!("输入张量形状: {:?}", input.shape());
 
     // 推理

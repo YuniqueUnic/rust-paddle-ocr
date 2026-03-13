@@ -48,7 +48,7 @@ fn main() {
 
     // 预处理
     let params = NormalizeParams::paddle_det();
-    let input = preprocess_for_det(&scaled, &params);
+    let input = preprocess_for_det(&scaled, &params).expect("预处理失败");
     println!("输入张量形状: {:?}", input.shape());
 
     // 推理

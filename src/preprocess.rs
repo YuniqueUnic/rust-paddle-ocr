@@ -5,6 +5,8 @@
 use image::{DynamicImage, GenericImageView, RgbImage};
 use ndarray::{Array4, ArrayBase, Dim, OwnedRepr};
 
+use crate::error::{OcrError, OcrResult};
+
 /// Image normalization parameters
 #[derive(Debug, Clone)]
 pub struct NormalizeParams {
@@ -51,12 +53,12 @@ pub fn get_padded_size(size: u32) -> u32 {
 /// Scale image to specified maximum side length
 ///
 /// Maintains aspect ratio, scales longest side to max_side_len
-pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> DynamicImage {
+pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> OcrResult<DynamicImage> {
     let (w, h) = img.dimensions();
     let max_dim = w.max(h);
 
     if max_dim <= max_side_len {
-        return img.clone();
+        return Ok(img.clone());
     }
 
     let scale = max_side_len as f64 / max_dim as f64;
@@ -69,11 +71,11 @@ pub fn resize_to_max_side(img: &DynamicImage, max_side_len: u32) -> DynamicImage
 /// Scale image to specified height (for recognition model)
 ///
 /// Scales maintaining aspect ratio
-pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> DynamicImage {
+pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> OcrResult<DynamicImage> {
     let (w, h) = img.dimensions();
 
     if h == target_height {
-        return img.clone();
+        return Ok(img.clone());
     }
 
     let scale = target_height as f64 / h as f64;
@@ -84,31 +86,44 @@ pub fn resize_to_height(img: &DynamicImage, target_height: u32) -> DynamicImage 
 
 /// Fast image resizing using fast_image_resize
 /// Can pass DynamicImage directly when "image" feature is enabled
-fn fast_resize(img: &DynamicImage, new_w: u32, new_h: u32) -> DynamicImage {
+fn fast_resize(img: &DynamicImage, new_w: u32, new_h: u32) -> OcrResult<DynamicImage> {
     use fast_image_resize::{images::Image, IntoImageView, PixelType, Resizer};
 
-    // Get source image pixel type
-    let pixel_type = img.pixel_type().unwrap_or(PixelType::U8x3);
+    // Only U8x3 (RGB) and U8x4 (RGBA) are handled end-to-end.
+    // Grayscale (U8), 16-bit, and other formats must be converted to RGB first;
+    // otherwise the output buffer byte count would not match the expected channel count.
+    let converted: DynamicImage;
+    let (src, pixel_type) = match img.pixel_type() {
+        Some(PixelType::U8x3) => (img, PixelType::U8x3),
+        Some(PixelType::U8x4) => (img, PixelType::U8x4),
+        _ => {
+            converted = DynamicImage::ImageRgb8(img.to_rgb8());
+            (&converted, PixelType::U8x3)
+        }
+    };
 
     // Create destination image container
     let mut dst_image = Image::new(new_w, new_h, pixel_type);
 
-    // Resize using Resizer (pass DynamicImage directly, no manual conversion needed)
+    // Resize using Resizer
     let mut resizer = Resizer::new();
-    resizer.resize(img, &mut dst_image, None).unwrap();
+    resizer
+        .resize(src, &mut dst_image, None)
+        .map_err(|e| OcrError::PreprocessError(format!("Image resize failed: {e}")))?;
 
     // Convert result back to DynamicImage
     match pixel_type {
-        PixelType::U8x3 => {
-            DynamicImage::ImageRgb8(RgbImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap())
-        }
-        PixelType::U8x4 => DynamicImage::ImageRgba8(
-            image::RgbaImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap(),
-        ),
-        _ => {
-            // Convert other types to RGB
-            DynamicImage::ImageRgb8(RgbImage::from_raw(new_w, new_h, dst_image.into_vec()).unwrap())
-        }
+        PixelType::U8x3 => RgbImage::from_raw(new_w, new_h, dst_image.into_vec())
+            .map(DynamicImage::ImageRgb8)
+            .ok_or_else(|| {
+                OcrError::PreprocessError("RGB buffer size mismatch after resize".into())
+            }),
+        PixelType::U8x4 => image::RgbaImage::from_raw(new_w, new_h, dst_image.into_vec())
+            .map(DynamicImage::ImageRgba8)
+            .ok_or_else(|| {
+                OcrError::PreprocessError("RGBA buffer size mismatch after resize".into())
+            }),
+        _ => unreachable!("pixel_type is constrained to U8x3 or U8x4 above"),
     }
 }
 
@@ -118,7 +133,7 @@ fn fast_resize(img: &DynamicImage, new_w: u32, new_h: u32) -> DynamicImage {
 pub fn preprocess_for_det(
     img: &DynamicImage,
     params: &NormalizeParams,
-) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
     let (w, h) = img.dimensions();
     let pad_w = get_padded_size(w) as usize;
     let pad_h = get_padded_size(h) as usize;
@@ -138,7 +153,7 @@ pub fn preprocess_for_det(
         }
     }
 
-    input
+    Ok(input)
 }
 
 /// Convert image to recognition model input tensor
@@ -149,7 +164,7 @@ pub fn preprocess_for_rec(
     img: &DynamicImage,
     target_height: u32,
     params: &NormalizeParams,
-) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
     let (w, h) = img.dimensions();
 
     // Calculate scaled width
@@ -183,7 +198,7 @@ pub fn preprocess_for_rec(
         }
     }
 
-    input
+    Ok(input)
 }
 
 /// Batch preprocess recognition images
@@ -193,9 +208,9 @@ pub fn preprocess_batch_for_rec(
     images: &[DynamicImage],
     target_height: u32,
     params: &NormalizeParams,
-) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
     if images.is_empty() {
-        return Array4::<f32>::zeros((0, 3, target_height as usize, 0));
+        return Ok(Array4::<f32>::zeros((0, 3, target_height as usize, 0)));
     }
 
     // Calculate scaled width for all images
@@ -208,13 +223,14 @@ pub fn preprocess_batch_for_rec(
         })
         .collect();
 
+    // widths is non-empty because images is non-empty (checked above)
     let max_width = *widths.iter().max().unwrap() as usize;
     let batch_size = images.len();
 
     let mut batch = Array4::<f32>::zeros((batch_size, 3, target_height as usize, max_width));
 
     for (i, (img, &w)) in images.iter().zip(widths.iter()).enumerate() {
-        let resized = resize_to_height(img, target_height);
+        let resized = resize_to_height(img, target_height)?;
         let rgb_img = resized.to_rgb8();
 
         for y in 0..target_height as usize {
@@ -229,7 +245,7 @@ pub fn preprocess_batch_for_rec(
         }
     }
 
-    batch
+    Ok(batch)
 }
 
 /// Crop image region
@@ -346,7 +362,7 @@ mod tests {
     #[test]
     fn test_resize_to_max_side_no_resize() {
         let img = DynamicImage::new_rgb8(100, 50);
-        let resized = resize_to_max_side(&img, 200);
+        let resized = resize_to_max_side(&img, 200).unwrap();
 
         // 图像已经小于最大边，不应该缩放
         assert_eq!(resized.width(), 100);
@@ -356,7 +372,7 @@ mod tests {
     #[test]
     fn test_resize_to_max_side_width_limited() {
         let img = DynamicImage::new_rgb8(1000, 500);
-        let resized = resize_to_max_side(&img, 500);
+        let resized = resize_to_max_side(&img, 500).unwrap();
 
         // 宽度是最大边，应该缩放到 500
         assert_eq!(resized.width(), 500);
@@ -366,7 +382,7 @@ mod tests {
     #[test]
     fn test_resize_to_max_side_height_limited() {
         let img = DynamicImage::new_rgb8(500, 1000);
-        let resized = resize_to_max_side(&img, 500);
+        let resized = resize_to_max_side(&img, 500).unwrap();
 
         // 高度是最大边，应该缩放到 500
         assert_eq!(resized.width(), 250);
@@ -376,7 +392,7 @@ mod tests {
     #[test]
     fn test_resize_to_height() {
         let img = DynamicImage::new_rgb8(200, 100);
-        let resized = resize_to_height(&img, 48);
+        let resized = resize_to_height(&img, 48).unwrap();
 
         assert_eq!(resized.height(), 48);
         // 宽度应该按比例缩放: 200 * 48/100 = 96
@@ -386,7 +402,7 @@ mod tests {
     #[test]
     fn test_resize_to_height_no_resize() {
         let img = DynamicImage::new_rgb8(200, 48);
-        let resized = resize_to_height(&img, 48);
+        let resized = resize_to_height(&img, 48).unwrap();
 
         // 高度已经是目标高度，不应该缩放
         assert_eq!(resized.height(), 48);
@@ -397,7 +413,7 @@ mod tests {
     fn test_preprocess_for_det_shape() {
         let img = DynamicImage::new_rgb8(100, 50);
         let params = NormalizeParams::paddle_det();
-        let tensor = preprocess_for_det(&img, &params);
+        let tensor = preprocess_for_det(&img, &params).unwrap();
 
         // 输出形状应该是 [1, 3, H, W]，H 和 W 是 32 的倍数
         assert_eq!(tensor.shape()[0], 1);
@@ -410,7 +426,7 @@ mod tests {
     fn test_preprocess_for_rec_shape() {
         let img = DynamicImage::new_rgb8(200, 100);
         let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_for_rec(&img, 48, &params);
+        let tensor = preprocess_for_rec(&img, 48, &params).unwrap();
 
         // 输出高度应该是 48
         assert_eq!(tensor.shape()[0], 1);
@@ -424,7 +440,7 @@ mod tests {
     fn test_preprocess_batch_for_rec_empty() {
         let images: Vec<DynamicImage> = vec![];
         let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_batch_for_rec(&images, 48, &params);
+        let tensor = preprocess_batch_for_rec(&images, 48, &params).unwrap();
 
         assert_eq!(tensor.shape()[0], 0);
     }
@@ -433,7 +449,7 @@ mod tests {
     fn test_preprocess_batch_for_rec_single() {
         let images = vec![DynamicImage::new_rgb8(200, 100)];
         let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_batch_for_rec(&images, 48, &params);
+        let tensor = preprocess_batch_for_rec(&images, 48, &params).unwrap();
 
         assert_eq!(tensor.shape()[0], 1);
         assert_eq!(tensor.shape()[1], 3);
@@ -447,7 +463,7 @@ mod tests {
             DynamicImage::new_rgb8(300, 100),
         ];
         let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_batch_for_rec(&images, 48, &params);
+        let tensor = preprocess_batch_for_rec(&images, 48, &params).unwrap();
 
         assert_eq!(tensor.shape()[0], 2);
         assert_eq!(tensor.shape()[1], 3);

@@ -405,7 +405,7 @@ impl OcrEngine {
         }
 
         // 2. Batch recognition
-        let (mut images, boxes): (Vec<DynamicImage>, Vec<TextBox>) = detections.into_iter().unzip();
+        let (images, boxes): (Vec<DynamicImage>, Vec<TextBox>) = detections.into_iter().unzip();
 
         let rec_results = if self.config.enable_parallel && images.len() > 4 {
             // Parallel recognition: for multiple text regions, use rayon for parallel processing
