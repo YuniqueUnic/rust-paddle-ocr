@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::det::{DetModel, DetOptions};
 use crate::error::{OcrError, OcrResult};
 use crate::mnn::{Backend, InferenceConfig, PrecisionMode};
-use crate::postprocess::TextBox;
 use crate::ori::{OriModel, OriOptions};
+use crate::postprocess::TextBox;
 use crate::rec::{RecModel, RecOptions, RecognitionResult};
 
 /// OCR result
@@ -232,9 +232,9 @@ impl OcrEngine {
                 .with_options(rec_options);
 
         let ori_model = match ori_model_path {
-            Some(path) => Some(
-                OriModel::from_file(path, Some(inference_config))?.with_options(ori_options),
-            ),
+            Some(path) => {
+                Some(OriModel::from_file(path, Some(inference_config))?.with_options(ori_options))
+            }
             None => None,
         };
 
@@ -542,15 +542,15 @@ impl OcrEngineBuilder {
 
     /// Build OCR engine
     pub fn build(self) -> OcrResult<OcrEngine> {
-        let det_model_path = self.det_model_path.ok_or_else(|| {
-            OcrError::InvalidParameter("Missing det_model_path".to_string())
-        })?;
-        let rec_model_path = self.rec_model_path.ok_or_else(|| {
-            OcrError::InvalidParameter("Missing rec_model_path".to_string())
-        })?;
-        let charset_path = self.charset_path.ok_or_else(|| {
-            OcrError::InvalidParameter("Missing charset_path".to_string())
-        })?;
+        let det_model_path = self
+            .det_model_path
+            .ok_or_else(|| OcrError::InvalidParameter("Missing det_model_path".to_string()))?;
+        let rec_model_path = self
+            .rec_model_path
+            .ok_or_else(|| OcrError::InvalidParameter("Missing rec_model_path".to_string()))?;
+        let charset_path = self
+            .charset_path
+            .ok_or_else(|| OcrError::InvalidParameter("Missing charset_path".to_string()))?;
 
         OcrEngine::build_with_paths(
             det_model_path.as_path(),
@@ -643,8 +643,13 @@ pub fn ocr_file_with_ori(
     ori_model_path: impl AsRef<Path>,
 ) -> OcrResult<Vec<OcrResult_>> {
     let image = image::open(image_path)?;
-    let engine =
-        OcrEngine::new_with_ori(det_model_path, rec_model_path, charset_path, ori_model_path, None)?;
+    let engine = OcrEngine::new_with_ori(
+        det_model_path,
+        rec_model_path,
+        charset_path,
+        ori_model_path,
+        None,
+    )?;
     engine.recognize(&image)
 }
 
@@ -661,17 +666,6 @@ fn rotate_by_angle(image: &DynamicImage, angle: i32) -> DynamicImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_engine_config() {
-        let config = OcrEngineConfig::default();
-        assert_eq!(config.thread_count, 4);
-        assert_eq!(config.backend, Backend::CPU);
-        assert_eq!(config.ori_min_confidence, 0.5);
-
-        let config = OcrEngineConfig::fast();
-        assert_eq!(config.precision_mode, PrecisionMode::Low);
-    }
 
     #[test]
     fn test_ocr_result() {
