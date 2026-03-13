@@ -215,15 +215,25 @@ fn build_mnn_with_cmake(
 
     // iOS cross-compilation
     if os == "ios" {
+        let rust_target = env::var("TARGET").unwrap_or_default();
+        let is_simulator = rust_target.contains("-sim") || arch == "x86_64";
+
         config
             .define("CMAKE_SYSTEM_NAME", "iOS")
-            .define("MNN_BUILD_FOR_IOS", "ON");
+            .define("MNN_BUILD_FOR_IOS", "ON")
+            .define("CMAKE_OSX_DEPLOYMENT_TARGET", "13.0");
 
         if arch == "aarch64" {
             config.define("CMAKE_OSX_ARCHITECTURES", "arm64");
         } else if arch == "x86_64" {
-            // Simulator
             config.define("CMAKE_OSX_ARCHITECTURES", "x86_64");
+        }
+
+        // Critical: set the correct SDK for simulator vs device
+        if is_simulator {
+            config.define("CMAKE_OSX_SYSROOT", "iphonesimulator");
+        } else {
+            config.define("CMAKE_OSX_SYSROOT", "iphoneos");
         }
     }
 
