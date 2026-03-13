@@ -408,8 +408,15 @@ fn bind_gen(
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false);
 
-    // Android-specific clang target
+    // Android-specific clang target and sysroot
     if os == "android" {
+        let ndk = env::var("ANDROID_NDK_ROOT")
+            .or_else(|_| env::var("ANDROID_NDK_HOME"))
+            .or_else(|_| env::var("ANDROID_NDK"))
+            .or_else(|_| env::var("NDK_HOME"))
+            .unwrap_or_default();
+
+        let api_level = "21";
         let target = match arch {
             "aarch64" => "aarch64-linux-android",
             "arm" => "armv7-linux-androideabi",
@@ -417,7 +424,38 @@ fn bind_gen(
             "x86" => "i686-linux-android",
             _ => "aarch64-linux-android",
         };
-        builder = builder.clang_arg(format!("--target={}", target));
+        builder = builder.clang_arg(format!("--target={}{}", target, api_level));
+
+        // Point bindgen to the NDK sysroot so it doesn't pick up host headers
+        if !ndk.is_empty() {
+            let host_tag = if cfg!(target_os = "macos") {
+                "darwin-x86_64"
+            } else {
+                "linux-x86_64"
+            };
+            let sysroot = PathBuf::from(&ndk)
+                .join("toolchains/llvm/prebuilt")
+                .join(host_tag)
+                .join("sysroot");
+            if sysroot.exists() {
+                builder = builder.clang_arg(format!("--sysroot={}", sysroot.display()));
+            }
+        }
+    }
+
+    // iOS-specific: remap target triple for clang/bindgen compatibility
+    if os == "ios" {
+        let rust_target = env::var("TARGET").unwrap_or_default();
+        let clang_target = if rust_target == "aarch64-apple-ios-sim" {
+            "arm64-apple-ios13.0-simulator".to_string()
+        } else if rust_target == "aarch64-apple-ios" {
+            "arm64-apple-ios13.0".to_string()
+        } else if rust_target == "x86_64-apple-ios" {
+            "x86_64-apple-ios13.0-simulator".to_string()
+        } else {
+            rust_target
+        };
+        builder = builder.clang_arg(format!("--target={}", clang_target));
     }
 
     let bindings = builder.generate().expect("Unable to generate bindings");
