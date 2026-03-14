@@ -1,0 +1,413 @@
+//! 所有模型集成测试
+//!
+//! 使用 res/1.png（纯英文图片）统一测试所有模型的推理能力
+
+use ocr_rs::{DetModel, OcrEngine, OriModel, RecModel};
+
+const TEST_IMAGE: &str = "res/1.png";
+
+// ============================================================
+// 检测模型路径
+// ============================================================
+const DET_V5: &str = "models/PP-OCRv5_mobile_det.mnn";
+const DET_V5_FP16: &str = "models/PP-OCRv5_mobile_det_fp16.mnn";
+const DET_V4: &str = "models/ch_PP-OCRv4_det_infer.mnn";
+
+// ============================================================
+// 识别模型 + 字符集路径
+// ============================================================
+const REC_V5: &str = "models/PP-OCRv5_mobile_rec.mnn";
+const REC_V5_FP16: &str = "models/PP-OCRv5_mobile_rec_fp16.mnn";
+const CHARSET_V5: &str = "models/ppocr_keys_v5.txt";
+
+const REC_V4: &str = "models/ch_PP-OCRv4_rec_infer.mnn";
+const CHARSET_V4: &str = "models/ppocr_keys_v4.txt";
+
+const REC_EN: &str = "models/en_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_EN: &str = "models/ppocr_keys_en.txt";
+
+const REC_ARABIC: &str = "models/arabic_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_ARABIC: &str = "models/ppocr_keys_arabic.txt";
+
+const REC_CYRILLIC: &str = "models/cyrillic_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_CYRILLIC: &str = "models/ppocr_keys_cyrillic.txt";
+
+const REC_DEVANAGARI: &str = "models/devanagari_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_DEVANAGARI: &str = "models/ppocr_keys_devanagari.txt";
+
+const REC_EL: &str = "models/el_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_EL: &str = "models/ppocr_keys_el.txt";
+
+const REC_ESLAV: &str = "models/eslav_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_ESLAV: &str = "models/ppocr_keys_eslav.txt";
+
+const REC_KOREAN: &str = "models/korean_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_KOREAN: &str = "models/ppocr_keys_korean.txt";
+
+const REC_LATIN: &str = "models/latin_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_LATIN: &str = "models/ppocr_keys_latin.txt";
+
+const REC_TA: &str = "models/ta_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_TA: &str = "models/ppocr_keys_ta.txt";
+
+const REC_TE: &str = "models/te_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_TE: &str = "models/ppocr_keys_te.txt";
+
+const REC_TH: &str = "models/th_PP-OCRv5_mobile_rec_infer.mnn";
+const CHARSET_TH: &str = "models/ppocr_keys_th.txt";
+
+// ============================================================
+// 方向分类模型路径
+// ============================================================
+const ORI_MODEL: &str = "models/PP-LCNet_x1_0_doc_ori.mnn";
+
+// ============================================================
+// 辅助函数
+// ============================================================
+fn require_file(path: &str) -> bool {
+    if !std::path::Path::new(path).exists() {
+        eprintln!("跳过测试：文件不存在 {}", path);
+        false
+    } else {
+        true
+    }
+}
+
+fn load_test_image() -> image::DynamicImage {
+    image::open(TEST_IMAGE).expect("无法打开测试图片 res/1.png")
+}
+
+/// 通用：检测模型 + 识别模型 完整 pipeline 测试
+fn run_full_pipeline(det_path: &str, rec_path: &str, charset_path: &str, label: &str) {
+    if !require_file(det_path)
+        || !require_file(rec_path)
+        || !require_file(charset_path)
+        || !require_file(TEST_IMAGE)
+    {
+        return;
+    }
+
+    let engine = OcrEngine::new(det_path, rec_path, charset_path, None)
+        .unwrap_or_else(|e| panic!("[{}] 引擎创建失败: {:?}", label, e));
+
+    let image = load_test_image();
+    let results = engine
+        .recognize(&image)
+        .unwrap_or_else(|e| panic!("[{}] 识别失败: {:?}", label, e));
+
+    println!("[{}] 识别到 {} 个文本区域", label, results.len());
+    for r in &results {
+        println!("  text={:?}  confidence={:.4}", r.text, r.confidence);
+    }
+
+    assert!(!results.is_empty(), "[{}] 测试图片应该检测到文本", label);
+
+    for r in &results {
+        assert!(
+            r.confidence >= 0.0 && r.confidence <= 1.0,
+            "[{}] 置信度应在 [0,1] 范围内，实际: {}",
+            label,
+            r.confidence
+        );
+    }
+}
+
+/// 通用：仅检测模型测试
+fn run_det_only(det_path: &str, label: &str) {
+    if !require_file(det_path) || !require_file(TEST_IMAGE) {
+        return;
+    }
+
+    let det = DetModel::from_file(det_path, None)
+        .unwrap_or_else(|e| panic!("[{}] 检测模型创建失败: {:?}", label, e));
+
+    let image = load_test_image();
+    let boxes = det
+        .detect(&image)
+        .unwrap_or_else(|e| panic!("[{}] 检测失败: {:?}", label, e));
+
+    println!("[{}] 检测到 {} 个文本框", label, boxes.len());
+    assert!(!boxes.is_empty(), "[{}] 测试图片应该检测到文本框", label);
+}
+
+/// 通用：仅识别模型测试（使用默认 v5 det 做前置检测）
+fn run_rec_only(rec_path: &str, charset_path: &str, label: &str) {
+    if !require_file(DET_V5)
+        || !require_file(rec_path)
+        || !require_file(charset_path)
+        || !require_file(TEST_IMAGE)
+    {
+        return;
+    }
+
+    let det = DetModel::from_file(DET_V5, None)
+        .unwrap_or_else(|e| panic!("[{}] 检测模型创建失败: {:?}", label, e));
+    let rec = RecModel::from_file(rec_path, charset_path, None)
+        .unwrap_or_else(|e| panic!("[{}] 识别模型创建失败: {:?}", label, e));
+
+    let image = load_test_image();
+    let detections = det
+        .detect_and_crop(&image)
+        .unwrap_or_else(|e| panic!("[{}] 检测裁剪失败: {:?}", label, e));
+
+    assert!(!detections.is_empty(), "[{}] 应该检测到文本区域", label);
+
+    let images: Vec<_> = detections.iter().map(|(img, _)| img.clone()).collect();
+    let results = rec
+        .recognize_batch(&images)
+        .unwrap_or_else(|e| panic!("[{}] 批量识别失败: {:?}", label, e));
+
+    println!("[{}] 批量识别 {} 个区域", label, results.len());
+    for r in &results {
+        println!("  text={:?}  confidence={:.4}", r.text, r.confidence);
+    }
+
+    assert_eq!(
+        results.len(),
+        images.len(),
+        "[{}] 结果数量应与输入一致",
+        label
+    );
+}
+
+// ============================================================
+// 检测模型测试
+// ============================================================
+
+#[test]
+fn test_det_v5() {
+    run_det_only(DET_V5, "det-v5");
+}
+
+#[test]
+fn test_det_v5_fp16() {
+    run_det_only(DET_V5_FP16, "det-v5-fp16");
+}
+
+#[test]
+fn test_det_v4() {
+    run_det_only(DET_V4, "det-v4");
+}
+
+// ============================================================
+// 识别模型测试（仅识别，使用 v5 det 做前置检测）
+// ============================================================
+
+#[test]
+fn test_rec_v5() {
+    run_rec_only(REC_V5, CHARSET_V5, "rec-v5");
+}
+
+#[test]
+fn test_rec_v5_fp16() {
+    run_rec_only(REC_V5_FP16, CHARSET_V5, "rec-v5-fp16");
+}
+
+#[test]
+fn test_rec_v4() {
+    run_rec_only(REC_V4, CHARSET_V4, "rec-v4");
+}
+
+#[test]
+fn test_rec_en() {
+    run_rec_only(REC_EN, CHARSET_EN, "rec-en");
+}
+
+#[test]
+fn test_rec_arabic() {
+    run_rec_only(REC_ARABIC, CHARSET_ARABIC, "rec-arabic");
+}
+
+#[test]
+fn test_rec_cyrillic() {
+    run_rec_only(REC_CYRILLIC, CHARSET_CYRILLIC, "rec-cyrillic");
+}
+
+#[test]
+fn test_rec_devanagari() {
+    run_rec_only(REC_DEVANAGARI, CHARSET_DEVANAGARI, "rec-devanagari");
+}
+
+#[test]
+fn test_rec_el() {
+    run_rec_only(REC_EL, CHARSET_EL, "rec-el");
+}
+
+#[test]
+fn test_rec_eslav() {
+    run_rec_only(REC_ESLAV, CHARSET_ESLAV, "rec-eslav");
+}
+
+#[test]
+fn test_rec_korean() {
+    run_rec_only(REC_KOREAN, CHARSET_KOREAN, "rec-korean");
+}
+
+#[test]
+fn test_rec_latin() {
+    run_rec_only(REC_LATIN, CHARSET_LATIN, "rec-latin");
+}
+
+#[test]
+fn test_rec_ta() {
+    run_rec_only(REC_TA, CHARSET_TA, "rec-ta");
+}
+
+#[test]
+fn test_rec_te() {
+    run_rec_only(REC_TE, CHARSET_TE, "rec-te");
+}
+
+#[test]
+fn test_rec_th() {
+    run_rec_only(REC_TH, CHARSET_TH, "rec-th");
+}
+
+// ============================================================
+// 完整 OCR Pipeline 测试（det + rec 全组合）
+// ============================================================
+
+#[test]
+fn test_pipeline_v5_det_v5_rec() {
+    run_full_pipeline(DET_V5, REC_V5, CHARSET_V5, "pipeline-v5+v5");
+}
+
+#[test]
+fn test_pipeline_v5_det_v5_rec_fp16() {
+    run_full_pipeline(DET_V5, REC_V5_FP16, CHARSET_V5, "pipeline-v5+v5fp16");
+}
+
+#[test]
+fn test_pipeline_v5fp16_det_v5_rec() {
+    run_full_pipeline(DET_V5_FP16, REC_V5, CHARSET_V5, "pipeline-v5fp16+v5");
+}
+
+#[test]
+fn test_pipeline_v4_det_v4_rec() {
+    run_full_pipeline(DET_V4, REC_V4, CHARSET_V4, "pipeline-v4+v4");
+}
+
+#[test]
+fn test_pipeline_v5_det_en_rec() {
+    run_full_pipeline(DET_V5, REC_EN, CHARSET_EN, "pipeline-v5+en");
+}
+
+#[test]
+fn test_pipeline_v5_det_arabic_rec() {
+    run_full_pipeline(DET_V5, REC_ARABIC, CHARSET_ARABIC, "pipeline-v5+arabic");
+}
+
+#[test]
+fn test_pipeline_v5_det_cyrillic_rec() {
+    run_full_pipeline(
+        DET_V5,
+        REC_CYRILLIC,
+        CHARSET_CYRILLIC,
+        "pipeline-v5+cyrillic",
+    );
+}
+
+#[test]
+fn test_pipeline_v5_det_devanagari_rec() {
+    run_full_pipeline(
+        DET_V5,
+        REC_DEVANAGARI,
+        CHARSET_DEVANAGARI,
+        "pipeline-v5+devanagari",
+    );
+}
+
+#[test]
+fn test_pipeline_v5_det_el_rec() {
+    run_full_pipeline(DET_V5, REC_EL, CHARSET_EL, "pipeline-v5+el");
+}
+
+#[test]
+fn test_pipeline_v5_det_eslav_rec() {
+    run_full_pipeline(DET_V5, REC_ESLAV, CHARSET_ESLAV, "pipeline-v5+eslav");
+}
+
+#[test]
+fn test_pipeline_v5_det_korean_rec() {
+    run_full_pipeline(DET_V5, REC_KOREAN, CHARSET_KOREAN, "pipeline-v5+korean");
+}
+
+#[test]
+fn test_pipeline_v5_det_latin_rec() {
+    run_full_pipeline(DET_V5, REC_LATIN, CHARSET_LATIN, "pipeline-v5+latin");
+}
+
+#[test]
+fn test_pipeline_v5_det_ta_rec() {
+    run_full_pipeline(DET_V5, REC_TA, CHARSET_TA, "pipeline-v5+ta");
+}
+
+#[test]
+fn test_pipeline_v5_det_te_rec() {
+    run_full_pipeline(DET_V5, REC_TE, CHARSET_TE, "pipeline-v5+te");
+}
+
+#[test]
+fn test_pipeline_v5_det_th_rec() {
+    run_full_pipeline(DET_V5, REC_TH, CHARSET_TH, "pipeline-v5+th");
+}
+
+// ============================================================
+// 方向分类模型测试
+// ============================================================
+
+#[test]
+fn test_ori_model() {
+    if !require_file(ORI_MODEL) || !require_file(TEST_IMAGE) {
+        return;
+    }
+
+    let ori = OriModel::from_file(ORI_MODEL, None)
+        .unwrap_or_else(|e| panic!("方向分类模型创建失败: {:?}", e));
+
+    let image = load_test_image();
+    let result = ori
+        .classify(&image)
+        .unwrap_or_else(|e| panic!("方向分类失败: {:?}", e));
+
+    println!(
+        "[ori] class_idx={}, angle={}°, confidence={:.4}",
+        result.class_idx, result.angle, result.confidence
+    );
+
+    assert!(
+        result.confidence >= 0.0 && result.confidence <= 1.0,
+        "方向分类置信度应在 [0,1] 范围内"
+    );
+    // 正常英文文档应该是 0° 方向
+    assert_eq!(result.angle, 0, "纯英文图片方向应为 0°");
+}
+
+// ============================================================
+// 带方向模型的完整 pipeline 测试
+// ============================================================
+
+#[test]
+fn test_pipeline_with_ori_model() {
+    if !require_file(DET_V5)
+        || !require_file(REC_V5)
+        || !require_file(CHARSET_V5)
+        || !require_file(ORI_MODEL)
+        || !require_file(TEST_IMAGE)
+    {
+        return;
+    }
+
+    let engine = OcrEngine::new_with_ori(DET_V5, REC_V5, CHARSET_V5, ORI_MODEL, None)
+        .expect("带方向模型的 OCR 引擎创建失败");
+
+    let image = load_test_image();
+    let results = engine.recognize(&image).expect("带方向模型识别失败");
+
+    println!("[pipeline+ori] 识别到 {} 个文本区域", results.len());
+    for r in &results {
+        println!("  text={:?}  confidence={:.4}", r.text, r.confidence);
+    }
+
+    assert!(!results.is_empty(), "带方向模型应识别到文本");
+}
