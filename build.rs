@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
@@ -559,6 +560,10 @@ fn bind_gen(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str, arch
         builder = builder.clang_arg(format!("-I{}", inc.display()));
     }
 
+    if os == "linux" {
+        builder = add_linux_system_include_args(builder);
+    }
+
     // Android-specific clang target and sysroot
     if os == "android" {
         let ndk = env::var("ANDROID_NDK_ROOT")
@@ -613,4 +618,81 @@ fn bind_gen(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str, arch
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     fs::write(out_path.join("mnn_bindings.rs"), bindings.to_string())
         .expect("Couldn't write bindings!");
+}
+
+fn add_linux_system_include_args(mut builder: bindgen::Builder) -> bindgen::Builder {
+    let mut include_dirs = Vec::new();
+    let mut seen = HashSet::new();
+
+    let compiler = cc::Build::new().get_compiler();
+    let compiler_path = compiler.path();
+
+    if let Some(include_dir) = command_path_output(compiler_path, &["-print-file-name=include"]) {
+        push_unique_path(&mut include_dirs, &mut seen, PathBuf::from(include_dir));
+    }
+
+    let sysroot = command_path_output(compiler_path, &["-print-sysroot"])
+        .filter(|value| !value.is_empty() && value != "/");
+
+    let target_include = command_path_output(compiler_path, &["-dumpmachine"])
+        .map(PathBuf::from)
+        .or_else(|| env::var("TARGET").ok().map(PathBuf::from));
+
+    if let Some(sysroot) = sysroot.as_ref() {
+        let sysroot_path = PathBuf::from(sysroot);
+        push_unique_path(
+            &mut include_dirs,
+            &mut seen,
+            sysroot_path.join("usr/local/include"),
+        );
+        if let Some(target) = target_include.as_ref() {
+            push_unique_path(
+                &mut include_dirs,
+                &mut seen,
+                sysroot_path.join("usr/include").join(target),
+            );
+        }
+        push_unique_path(&mut include_dirs, &mut seen, sysroot_path.join("usr/include"));
+    }
+
+    push_unique_path(&mut include_dirs, &mut seen, PathBuf::from("/usr/local/include"));
+    if let Some(target) = target_include.as_ref() {
+        push_unique_path(
+            &mut include_dirs,
+            &mut seen,
+            PathBuf::from("/usr/include").join(target),
+        );
+    }
+    push_unique_path(&mut include_dirs, &mut seen, PathBuf::from("/usr/include"));
+
+    for dir in include_dirs {
+        println!(
+            "cargo:warning=Adding Linux system include for bindgen: {}",
+            dir.display()
+        );
+        builder = builder.clang_arg(format!("-isystem{}", dir.display()));
+    }
+
+    builder
+}
+
+fn command_path_output(program: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8(output.stdout).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf) {
+    if path.exists() && seen.insert(path.clone()) {
+        paths.push(path);
+    }
 }
