@@ -5,6 +5,8 @@
 use ocr_rs::{DetModel, OcrEngine, OriModel, RecModel};
 
 const TEST_IMAGE: &str = "res/1.png";
+/// 5.png 是 1.png 顺时针旋转 90° 的图片，用于测试方向检测
+const TEST_IMAGE_ROTATED_90: &str = "res/5.png";
 
 // ============================================================
 // 检测模型路径
@@ -410,4 +412,95 @@ fn test_pipeline_with_ori_model() {
     }
 
     assert!(!results.is_empty(), "带方向模型应识别到文本");
+}
+
+// ============================================================
+// 旋转图片方向检测测试（5.png = 1.png 顺时针旋转 90°）
+// ============================================================
+
+#[test]
+fn test_ori_model_rotated_90() {
+    if !require_file(ORI_MODEL) || !require_file(TEST_IMAGE_ROTATED_90) {
+        return;
+    }
+
+    let ori = OriModel::from_file(ORI_MODEL, None)
+        .unwrap_or_else(|e| panic!("方向分类模型创建失败: {:?}", e));
+
+    let image = image::open(TEST_IMAGE_ROTATED_90).expect("无法打开测试图片 res/5.png");
+    let result = ori
+        .classify(&image)
+        .unwrap_or_else(|e| panic!("方向分类失败: {:?}", e));
+
+    println!(
+        "[ori-rotated-90] class_idx={}, angle={}°, confidence={:.4}, scores={:?}",
+        result.class_idx, result.angle, result.confidence, result.scores
+    );
+
+    assert!(
+        result.confidence >= 0.0 && result.confidence <= 1.0,
+        "方向分类置信度应在 [0,1] 范围内"
+    );
+    // 顺时针旋转 90° 的图片，方向模型应检测到 90°
+    assert_eq!(
+        result.angle, 90,
+        "顺时针旋转 90° 的图片方向应为 90°，实际检测到 {}°",
+        result.angle
+    );
+}
+
+#[test]
+fn test_pipeline_with_ori_model_rotated_90() {
+    if !require_file(DET_V5)
+        || !require_file(REC_V5)
+        || !require_file(CHARSET_V5)
+        || !require_file(ORI_MODEL)
+        || !require_file(TEST_IMAGE_ROTATED_90)
+    {
+        return;
+    }
+
+    let engine = OcrEngine::new_with_ori(DET_V5, REC_V5, CHARSET_V5, ORI_MODEL, None)
+        .expect("带方向模型的 OCR 引擎创建失败");
+
+    // 使用旋转 90° 的图片进行识别，方向模型应自动纠正方向
+    let image = image::open(TEST_IMAGE_ROTATED_90).expect("无法打开测试图片 res/5.png");
+    let results = engine
+        .recognize(&image)
+        .expect("旋转图片带方向模型识别失败");
+
+    println!(
+        "[pipeline+ori+rotated90] 识别到 {} 个文本区域",
+        results.len()
+    );
+    for r in &results {
+        println!("  text={:?}  confidence={:.4}", r.text, r.confidence);
+    }
+
+    assert!(
+        !results.is_empty(),
+        "旋转 90° 的图片经方向校正后应识别到文本"
+    );
+
+    // 同时对比不带方向模型的结果
+    let engine_no_ori =
+        OcrEngine::new(DET_V5, REC_V5, CHARSET_V5, None).expect("无方向模型的 OCR 引擎创建失败");
+    let results_no_ori = engine_no_ori
+        .recognize(&image)
+        .expect("旋转图片无方向模型识别失败");
+
+    println!(
+        "[pipeline+no_ori+rotated90] 无方向模型识别到 {} 个文本区域",
+        results_no_ori.len()
+    );
+    for r in &results_no_ori {
+        println!("  text={:?}  confidence={:.4}", r.text, r.confidence);
+    }
+
+    // 带方向模型的结果应该比不带方向模型的结果更好（识别出更多文本或更高置信度）
+    println!(
+        "\n[对比] 带方向模型: {} 个结果 vs 无方向模型: {} 个结果",
+        results.len(),
+        results_no_ori.len()
+    );
 }
