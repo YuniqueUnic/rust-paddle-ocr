@@ -250,6 +250,49 @@ branch = "main"
 - MNN形式に変換された事前学習済みPaddleOCRモデル
 - テキスト認識用の文字セットファイル
 
+### MNNリンク方式
+
+デフォルトでは、[MNN-Prebuilds](https://github.com/zibo-chen/MNN-Prebuilds)のリリースから事前構築されたMNN静的ライブラリが自動的にダウンロードされます。ビルドにはcmakeまたはC++コンパイラツールチェーンは必要ありません。
+
+事前構築ダウンロードをサポートするプラットフォーム：
+- Linux x86_64 / aarch64
+- Windows x86_64 / i686
+- macOS（ユニバーサル：x86_64 + arm64）
+- iOS arm64 / arm64-sim
+- Android arm64-v8a / armeabi-v7a
+
+サポートされていないプラットフォームでは、ビルドシステムが自動的にMNNをソースからビルドする方式にフォールバックします。
+
+#### ソースからの強制ビルド
+
+カスタムMNNビルドオプション（例：GPUアクセラレーション）が必要な場合は、ソースからビルドを強制できます：
+
+```bash
+cargo build --features build-mnn-from-source
+```
+
+#### 事前構築動的ライブラリの使用
+
+```bash
+MNN_LIB_DIR=/path/to/mnn/lib MNN_INCLUDE_DIR=/path/to/mnn/include \
+  cargo build --features mnn-dynamic
+```
+
+#### 事前構築静的ライブラリの使用
+
+```bash
+MNN_LIB_DIR=/path/to/mnn/lib MNN_INCLUDE_DIR=/path/to/mnn/include \
+  cargo build --features mnn-static
+```
+
+#### 環境変数
+
+| 変数 | 必須 | 説明 |
+|---|---|---|
+| `MNN_LIB_DIR` | はい（`mnn-dynamic` / `mnn-static`を使用する場合） | 事前構築MNNライブラリを含むディレクトリ（`libMNN.so` / `libMNN.dylib` / `libMNN.a`） |
+| `MNN_INCLUDE_DIR` | いいえ | MNNヘッダーを含むディレクトリ。設定されていない場合は`MNN_SOURCE_DIR/include`または`3rd_party/MNN/include`にフォールバックします |
+| `MNN_SOURCE_DIR` | いいえ | MNNソースツリーのパス（ヘッダーの取得またはソースからのビルドに使用） |
+
 ## API アーキテクチャ
 
 本ライブラリは**階層化推論 API**を提供しており、シーンに合わせて最適な使用方法を選択できます：

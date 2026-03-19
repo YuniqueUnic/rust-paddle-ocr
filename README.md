@@ -252,7 +252,24 @@ This library requires:
 
 ### MNN Linking Mode
 
-By default, MNN is built from source automatically. You can also use pre-built MNN libraries to speed up compilation:
+By default, prebuilt MNN static libraries are automatically downloaded from [MNN-Prebuilds](https://github.com/zibo-chen/MNN-Prebuilds) releases. No cmake or C++ compiler toolchain is required for building.
+
+Supported platforms for prebuilt downloads:
+- Linux x86_64 / aarch64
+- Windows x86_64 / i686
+- macOS (universal: x86_64 + arm64)
+- iOS arm64 / arm64-sim
+- Android arm64-v8a / armeabi-v7a
+
+For unsupported platforms, the build system automatically falls back to building MNN from source.
+
+#### Force Build from Source
+
+If you need custom MNN build options (e.g., GPU acceleration), you can force building from source:
+
+```bash
+cargo build --features build-mnn-from-source
+```
 
 #### Use Pre-built Dynamic Library
 

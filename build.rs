@@ -1,15 +1,21 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
+/// MNN prebuilt version to download from GitHub releases
+const MNN_PREBUILT_VERSION: &str = "dev";
+const MNN_PREBUILT_REPO: &str = "zibo-chen/MNN-Prebuilds";
+
 /// MNN linking mode
 enum MnnLinkMode {
-    /// Build MNN from source (default)
+    /// Download prebuilt MNN from GitHub releases (default for supported platforms)
+    Prebuilt,
+    /// Build MNN from source
     BuildFromSource,
-    /// Use pre-built MNN dynamic library
+    /// Use pre-built MNN dynamic library (user-provided via MNN_LIB_DIR)
     Dynamic,
-    /// Use pre-built MNN static library
+    /// Use pre-built MNN static library (user-provided via MNN_LIB_DIR)
     Static,
 }
 
@@ -35,6 +41,7 @@ fn main() {
 
     let mnn_dynamic = env::var("CARGO_FEATURE_MNN_DYNAMIC").is_ok();
     let mnn_static = env::var("CARGO_FEATURE_MNN_STATIC").is_ok();
+    let build_from_source = env::var("CARGO_FEATURE_BUILD_MNN_FROM_SOURCE").is_ok();
 
     if mnn_dynamic && mnn_static {
         panic!("Features `mnn-dynamic` and `mnn-static` are mutually exclusive. Please enable only one.");
@@ -44,7 +51,15 @@ fn main() {
         MnnLinkMode::Dynamic
     } else if mnn_static {
         MnnLinkMode::Static
+    } else if build_from_source {
+        MnnLinkMode::BuildFromSource
+    } else if get_prebuilt_asset_name(&os, &arch).is_some() {
+        MnnLinkMode::Prebuilt
     } else {
+        println!(
+            "cargo:warning=No prebuilt MNN available for {}/{}, building from source...",
+            os, arch
+        );
         MnnLinkMode::BuildFromSource
     };
 
@@ -52,6 +67,34 @@ fn main() {
 
     // Determine MNN include dir and library dir based on link mode
     let (mnn_include_dir, mnn_lib_dir) = match &link_mode {
+        MnnLinkMode::Prebuilt => {
+            let asset_name = get_prebuilt_asset_name(&os, &arch)
+                .expect("No prebuilt available (should have been caught earlier)");
+            let prebuilt_dir = download_prebuilt_mnn(&manifest_dir_path, &asset_name, &os);
+
+            let include_dir = prebuilt_dir.join("include");
+            let lib_dir = prebuilt_dir.join("lib");
+
+            if !include_dir.exists() {
+                panic!(
+                    "Prebuilt MNN include directory not found: {}",
+                    include_dir.display()
+                );
+            }
+            if !lib_dir.exists() {
+                panic!(
+                    "Prebuilt MNN lib directory not found: {}",
+                    lib_dir.display()
+                );
+            }
+
+            println!(
+                "cargo:warning=Using prebuilt MNN {} for {}/{}",
+                MNN_PREBUILT_VERSION, os, arch
+            );
+
+            (vec![include_dir], vec![lib_dir])
+        }
         MnnLinkMode::BuildFromSource => {
             // Get or download MNN source code
             let mnn_source_dir = get_mnn_source(&manifest_dir_path);
@@ -113,7 +156,7 @@ fn main() {
     };
 
     // Build our C++ wrapper using cc (always needed)
-    build_wrapper(&manifest_dir_path, &mnn_include_dir, &os);
+    build_wrapper(&manifest_dir_path, &mnn_include_dir, &os, &link_mode);
 
     // Link libraries
     link_libraries(
@@ -184,6 +227,198 @@ fn get_mnn_include_dirs(manifest_dir: &PathBuf) -> Vec<PathBuf> {
          - MNN_SOURCE_DIR: path to MNN source tree\n\
          Or ensure 3rd_party/MNN exists in the project root."
     );
+}
+
+/// Get the prebuilt asset name for the current OS/arch combination.
+/// Returns None if no prebuilt is available.
+fn get_prebuilt_asset_name(os: &str, arch: &str) -> Option<String> {
+    let suffix = match (os, arch) {
+        ("linux", "x86_64") => "linux-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("windows", "x86_64") => "windows-x86_64",
+        ("windows", "x86") => "windows-i686",
+        ("macos", _) => "macos-universal", // universal binary for both x86_64 and arm64
+        ("ios", "aarch64") => {
+            let rust_target = env::var("TARGET").unwrap_or_default();
+            if rust_target.contains("-sim") {
+                "ios-arm64-sim"
+            } else {
+                "ios-arm64"
+            }
+        }
+        ("android", "aarch64") => "android-arm64-v8a",
+        ("android", "arm") => "android-armeabi-v7a",
+        _ => return None,
+    };
+    Some(format!("mnn-{}-{}", MNN_PREBUILT_VERSION, suffix))
+}
+
+/// Download and extract prebuilt MNN library from GitHub releases.
+/// Returns the path to the extracted directory containing lib/ and include/.
+fn download_prebuilt_mnn(manifest_dir: &Path, asset_name: &str, os: &str) -> PathBuf {
+    let cache_dir = manifest_dir.join("3rd_party").join("prebuilt");
+    let extract_dir = cache_dir.join(asset_name);
+
+    // Check if already extracted
+    if extract_dir.join("lib").exists() && extract_dir.join("include").exists() {
+        println!(
+            "cargo:warning=Using cached prebuilt MNN from: {}",
+            extract_dir.display()
+        );
+        return extract_dir;
+    }
+
+    fs::create_dir_all(&cache_dir).expect("Failed to create prebuilt cache directory");
+
+    // Determine archive extension and download URL
+    let (ext, url) = if os == "windows" {
+        (
+            "zip",
+            format!(
+                "https://github.com/{}/releases/download/{}/{}.zip",
+                MNN_PREBUILT_REPO, MNN_PREBUILT_VERSION, asset_name
+            ),
+        )
+    } else {
+        (
+            "tar.gz",
+            format!(
+                "https://github.com/{}/releases/download/{}/{}.tar.gz",
+                MNN_PREBUILT_REPO, MNN_PREBUILT_VERSION, asset_name
+            ),
+        )
+    };
+
+    let archive_path = cache_dir.join(format!("{}.{}", asset_name, ext));
+
+    // Download if archive doesn't exist
+    if !archive_path.exists() {
+        println!("cargo:warning=Downloading prebuilt MNN from: {}", url);
+        download_file(&url, &archive_path);
+    }
+
+    // Extract
+    println!(
+        "cargo:warning=Extracting prebuilt MNN to: {}",
+        extract_dir.display()
+    );
+
+    if os == "windows" {
+        extract_zip(&archive_path, &cache_dir);
+    } else {
+        extract_tar_gz(&archive_path, &cache_dir);
+    }
+
+    // Verify extraction
+    if !extract_dir.join("lib").exists() {
+        panic!(
+            "Prebuilt MNN extraction failed: lib/ not found in {}",
+            extract_dir.display()
+        );
+    }
+
+    // For Windows, reorganize lib files:
+    // prebuilt has MNN_static.lib -> rename to MNN.lib for static linking
+    if os == "windows" {
+        let lib_dir = extract_dir.join("lib");
+        let static_lib = lib_dir.join("MNN_static.lib");
+        let mnn_lib = lib_dir.join("MNN.lib");
+        if static_lib.exists() {
+            // MNN.lib from prebuilt is the import lib for DLL, we want the static one
+            // Backup the import lib and replace with static lib
+            let import_lib = lib_dir.join("MNN_import.lib");
+            if mnn_lib.exists() {
+                let _ = fs::rename(&mnn_lib, &import_lib);
+            }
+            fs::copy(&static_lib, &mnn_lib).expect("Failed to copy MNN_static.lib to MNN.lib");
+        }
+    }
+
+    extract_dir
+}
+
+/// Download a file from a URL using available system tool.
+fn download_file(url: &str, dest: &Path) {
+    // Try curl first (available on all modern platforms)
+    let status = Command::new("curl")
+        .args(&["-L", "-f", "-s", "-o"])
+        .arg(dest.to_str().unwrap())
+        .arg(url)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => return,
+        _ => {}
+    }
+
+    // Fallback: try powershell on Windows
+    if cfg!(target_os = "windows") {
+        let ps_cmd = format!(
+            "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
+            url,
+            dest.to_str().unwrap()
+        );
+        let status = Command::new("powershell")
+            .args(&["-NoProfile", "-Command", &ps_cmd])
+            .status();
+        match status {
+            Ok(s) if s.success() => return,
+            _ => {}
+        }
+    }
+
+    panic!(
+        "Failed to download {}. Please ensure curl is available, \
+         or download manually to: {}",
+        url,
+        dest.display()
+    );
+}
+
+/// Extract a .tar.gz archive.
+fn extract_tar_gz(archive: &Path, dest_dir: &Path) {
+    let status = Command::new("tar")
+        .args(&["xzf"])
+        .arg(archive.to_str().unwrap())
+        .args(&["-C"])
+        .arg(dest_dir.to_str().unwrap())
+        .status()
+        .expect("Failed to run tar");
+
+    if !status.success() {
+        panic!("Failed to extract {}", archive.display());
+    }
+}
+
+/// Extract a .zip archive.
+fn extract_zip(archive: &Path, dest_dir: &Path) {
+    // On Windows, use powershell's Expand-Archive
+    if cfg!(target_os = "windows") {
+        let ps_cmd = format!(
+            "Expand-Archive -Force -Path '{}' -DestinationPath '{}'",
+            archive.to_str().unwrap(),
+            dest_dir.to_str().unwrap()
+        );
+        let status = Command::new("powershell")
+            .args(&["-NoProfile", "-Command", &ps_cmd])
+            .status()
+            .expect("Failed to run powershell");
+        if !status.success() {
+            panic!("Failed to extract {}", archive.display());
+        }
+    } else {
+        // Fallback: unzip command
+        let status = Command::new("unzip")
+            .args(&["-o", "-q"])
+            .arg(archive.to_str().unwrap())
+            .args(&["-d"])
+            .arg(dest_dir.to_str().unwrap())
+            .status()
+            .expect("Failed to run unzip");
+        if !status.success() {
+            panic!("Failed to extract {}", archive.display());
+        }
+    }
 }
 
 /// Get MNN source code directory
@@ -424,7 +659,12 @@ fn build_mnn_with_cmake(
     config.build()
 }
 
-fn build_wrapper(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str) {
+fn build_wrapper(
+    manifest_dir: &PathBuf,
+    mnn_include_dirs: &[PathBuf],
+    os: &str,
+    link_mode: &MnnLinkMode,
+) {
     let wrapper_file = manifest_dir.join("cpp/src/mnn_wrapper.cpp");
 
     println!("cargo:rerun-if-changed=cpp/src/mnn_wrapper.cpp");
@@ -444,6 +684,10 @@ fn build_wrapper(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str)
     // Platform-specific C++ flags
     if os == "windows" {
         build.flag("/std:c++14").flag("/EHsc").flag("/W3");
+        // Match CRT with prebuilt MNN: prebuilt uses /MT (static CRT)
+        if matches!(link_mode, MnnLinkMode::Prebuilt) {
+            build.static_crt(true);
+        }
     } else {
         build.flag("-std=c++14").flag("-fvisibility=hidden");
     }
@@ -472,7 +716,7 @@ fn link_libraries(
         MnnLinkMode::Dynamic => {
             println!("cargo:rustc-link-lib=dylib=MNN");
         }
-        MnnLinkMode::Static | MnnLinkMode::BuildFromSource => {
+        MnnLinkMode::Static | MnnLinkMode::BuildFromSource | MnnLinkMode::Prebuilt => {
             println!("cargo:rustc-link-lib=static=MNN");
         }
     }
@@ -652,10 +896,18 @@ fn add_linux_system_include_args(mut builder: bindgen::Builder) -> bindgen::Buil
                 sysroot_path.join("usr/include").join(target),
             );
         }
-        push_unique_path(&mut include_dirs, &mut seen, sysroot_path.join("usr/include"));
+        push_unique_path(
+            &mut include_dirs,
+            &mut seen,
+            sysroot_path.join("usr/include"),
+        );
     }
 
-    push_unique_path(&mut include_dirs, &mut seen, PathBuf::from("/usr/local/include"));
+    push_unique_path(
+        &mut include_dirs,
+        &mut seen,
+        PathBuf::from("/usr/local/include"),
+    );
     if let Some(target) = target_include.as_ref() {
         push_unique_path(
             &mut include_dirs,

@@ -254,7 +254,24 @@ branch = "main"
 
 ### MNN 链接方式
 
-默认情况下，MNN 会自动从源码编译。你也可以使用预编译的 MNN 库来加速编译：
+默认情况下，会自动从 [MNN-Prebuilds](https://github.com/zibo-chen/MNN-Prebuilds) 下载预编译的 MNN 静态库，无需安装 cmake 或 C++ 编译工具链。
+
+支持自动下载预编译库的平台：
+- Linux x86_64 / aarch64
+- Windows x86_64 / i686
+- macOS（通用：x86_64 + arm64）
+- iOS arm64 / arm64-sim
+- Android arm64-v8a / armeabi-v7a
+
+不支持的平台会自动回退到从源码编译。
+
+#### 强制从源码编译
+
+如果需要自定义 MNN 编译选项（如 GPU 加速），可以强制从源码编译：
+
+```bash
+cargo build --features build-mnn-from-source
+```
 
 #### 使用预编译动态库
 
