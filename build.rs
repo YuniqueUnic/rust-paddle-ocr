@@ -741,6 +741,15 @@ fn link_libraries(
         _ => {}
     }
 
+    // Prebuilt MNN for macOS/iOS includes Metal backend, so always link Apple frameworks
+    if matches!(link_mode, MnnLinkMode::Prebuilt) && matches!(os, "macos" | "ios") {
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=Metal");
+        println!("cargo:rustc-link-lib=framework=MetalPerformanceShaders");
+        println!("cargo:rustc-link-lib=objc");
+    }
+
     // CoreML frameworks
     if coreml_enabled && matches!(os, "macos" | "ios") {
         println!("cargo:rustc-link-lib=framework=CoreML");
