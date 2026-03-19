@@ -265,6 +265,8 @@ fn download_prebuilt_mnn(manifest_dir: &Path, asset_name: &str, os: &str) -> Pat
             "cargo:warning=Using cached prebuilt MNN from: {}",
             extract_dir.display()
         );
+        // Ensure dynamic libs are removed even from cached extractions
+        remove_dynamic_libs(&extract_dir);
         return extract_dir;
     }
 
@@ -334,7 +336,26 @@ fn download_prebuilt_mnn(manifest_dir: &Path, asset_name: &str, os: &str) -> Pat
         }
     }
 
+    // Remove dynamic libraries to force static linking.
+    // On macOS the linker prefers .dylib over .a even with `static=MNN`.
+    remove_dynamic_libs(&extract_dir);
+
     extract_dir
+}
+
+/// Remove dynamic library files from the prebuilt lib directory to force static linking.
+fn remove_dynamic_libs(extract_dir: &Path) {
+    let lib_dir = extract_dir.join("lib");
+    if let Ok(entries) = fs::read_dir(&lib_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".dylib") || name.ends_with(".so") || name.ends_with(".dll") {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
 }
 
 /// Download a file from a URL using available system tool.
