@@ -89,3 +89,6 @@ path = "examples/advanced.rs"
 [[example]]
 name = "gpu_inference"
 path = "examples/gpu_inference.rs"
+
+[profile.dev]
+opt-level = 3
