@@ -237,6 +237,7 @@ fn get_prebuilt_asset_name(os: &str, arch: &str) -> Option<String> {
         ("linux", "aarch64") => "linux-aarch64",
         ("windows", "x86_64") => "windows-x86_64",
         ("windows", "x86") => "windows-i686",
+        ("windows", "aarch64") => "windows-aarch64",
         ("macos", _) => "macos-universal", // universal binary for both x86_64 and arm64
         ("ios", "aarch64") => {
             let rust_target = env::var("TARGET").unwrap_or_default();
