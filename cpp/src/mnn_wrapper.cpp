@@ -79,17 +79,17 @@ struct MNN_SessionPool
 
 // ============== Helper Functions ==============
 
-static MNN::ScheduleConfig create_schedule_config(const MNNR_Config *config)
+// Initialize schedule and backend configs from MNNR_Config.
+// Caller must ensure `schedule` and `backend` outlive any use of schedule.backendConfig.
+static void init_schedule_config(MNN::ScheduleConfig &schedule, MNN::BackendConfig &backend, const MNNR_Config *config)
 {
-    MNN::ScheduleConfig schedule;
-    schedule.type = MNN_FORWARD_CPU;
+    schedule.type = (config) ? static_cast<MNNForwardType>(config->forward_type) : MNN_FORWARD_CPU;
     schedule.numThread = config ? config->thread_count : 4;
     if (schedule.numThread <= 0)
     {
         schedule.numThread = 4;
     }
 
-    MNN::BackendConfig backend;
     if (config)
     {
         switch (config->precision_mode)
@@ -106,8 +106,6 @@ static MNN::ScheduleConfig create_schedule_config(const MNNR_Config *config)
         }
     }
     schedule.backendConfig = &backend;
-
-    return schedule;
 }
 
 static bool init_engine_tensors(MNN_InferenceEngine *engine)
@@ -165,7 +163,7 @@ MNN_SharedRuntime *mnnr_create_runtime(const MNNR_Config *config)
 
     runtime->precision_mode = config ? config->precision_mode : 0;
 
-    runtime->schedule_config.type = MNN_FORWARD_CPU;
+    runtime->schedule_config.type = (config) ? static_cast<MNNForwardType>(config->forward_type) : MNN_FORWARD_CPU;
     runtime->schedule_config.numThread = runtime->thread_count;
 
     switch (runtime->precision_mode)
@@ -214,7 +212,9 @@ MNN_InferenceEngine *mnnr_create_engine(
     }
 
     // Create default session
-    MNN::ScheduleConfig schedule = create_schedule_config(config);
+    MNN::ScheduleConfig schedule;
+    MNN::BackendConfig backend;
+    init_schedule_config(schedule, backend, config);
     engine->default_session = engine->interpreter->createSession(schedule);
     if (!engine->default_session)
     {
@@ -405,7 +405,9 @@ MNN_SessionPool *mnnr_create_session_pool(
     auto pool = new MNN_SessionPool();
     pool->engine = engine;
 
-    MNN::ScheduleConfig schedule = create_schedule_config(config);
+    MNN::ScheduleConfig schedule;
+    MNN::BackendConfig backend;
+    init_schedule_config(schedule, backend, config);
 
     // Create sessions
     for (size_t i = 0; i < pool_size; i++)
@@ -418,14 +420,8 @@ MNN_SessionPool *mnnr_create_session_pool(
             {
                 engine->interpreter->releaseSession(s);
             }
-            for (auto t : pool->input_tensors)
-            {
-                delete t;
-            }
-            for (auto t : pool->output_tensors)
-            {
-                delete t;
-            }
+            // Note: input/output tensors are owned by MNN sessions, not by us.
+            // They will be freed when sessions are released above.
             delete pool;
             return nullptr;
         }
@@ -557,7 +553,9 @@ MNN_SingleSession *mnnr_create_session(
     auto session = new MNN_SingleSession();
     session->engine = engine;
 
-    MNN::ScheduleConfig schedule = create_schedule_config(config);
+    MNN::ScheduleConfig schedule;
+    MNN::BackendConfig backend;
+    init_schedule_config(schedule, backend, config);
     session->session = engine->interpreter->createSession(schedule);
 
     if (!session->session)

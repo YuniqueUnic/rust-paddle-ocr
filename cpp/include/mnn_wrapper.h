@@ -41,6 +41,7 @@ extern "C"
         int32_t precision_mode; // 0=Normal, 1=Low(faster), 2=High(accurate)
         bool use_cache;         // Whether to use cache file
         int32_t data_format;    // Input/Output data format
+        int32_t forward_type;   // MNNForwardType: 0=CPU, 1=Metal, 2=CUDA, 3=OpenCL, 6=OpenGL, 7=Vulkan, 5=CoreML/NNAPI
     } MNNR_Config;
 
     // ============== Version & Info ==============

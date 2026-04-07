@@ -117,6 +117,21 @@ mod normal_impl {
         CoreML,
     }
 
+    impl Backend {
+        /// Convert to MNNForwardType integer value
+        fn to_forward_type(self) -> i32 {
+            match self {
+                Backend::CPU => 0,    // MNN_FORWARD_CPU
+                Backend::Metal => 1,  // MNN_FORWARD_METAL
+                Backend::CUDA => 2,   // MNN_FORWARD_CUDA
+                Backend::OpenCL => 3, // MNN_FORWARD_OPENCL
+                Backend::CoreML => 5, // MNN_FORWARD_NN
+                Backend::OpenGL => 6, // MNN_FORWARD_OPENGL
+                Backend::Vulkan => 7, // MNN_FORWARD_VULKAN
+            }
+        }
+    }
+
     /// Inference configuration
     #[derive(Debug, Clone)]
     pub struct InferenceConfig {
@@ -180,6 +195,7 @@ mod normal_impl {
                 precision_mode: self.precision_mode as i32,
                 use_cache: self.use_cache,
                 data_format: self.data_format as i32,
+                forward_type: self.backend.to_forward_type(),
             }
         }
     }
