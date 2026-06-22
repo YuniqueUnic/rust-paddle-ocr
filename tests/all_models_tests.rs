@@ -14,6 +14,9 @@ const TEST_IMAGE_ROTATED_90: &str = "res/5.png";
 const DET_V5: &str = "models/PP-OCRv5_mobile_det.mnn";
 const DET_V5_FP16: &str = "models/PP-OCRv5_mobile_det_fp16.mnn";
 const DET_V4: &str = "models/ch_PP-OCRv4_det_infer.mnn";
+const DET_V6_TINY: &str = "models/PP-OCRv6_tiny_det.mnn";
+const DET_V6_SMALL: &str = "models/PP-OCRv6_small_det.mnn";
+const DET_V6_MEDIUM: &str = "models/PP-OCRv6_medium_det.mnn";
 
 // ============================================================
 // 识别模型 + 字符集路径
@@ -24,6 +27,15 @@ const CHARSET_V5: &str = "models/ppocr_keys_v5.txt";
 
 const REC_V4: &str = "models/ch_PP-OCRv4_rec_infer.mnn";
 const CHARSET_V4: &str = "models/ppocr_keys_v4.txt";
+
+const REC_V6_TINY: &str = "models/PP-OCRv6_tiny_rec.mnn";
+const CHARSET_V6_TINY: &str = "models/ppocr_keys_v6_tiny.txt";
+
+const REC_V6_SMALL: &str = "models/PP-OCRv6_small_rec.mnn";
+const CHARSET_V6_SMALL: &str = "models/ppocr_keys_v6_small.txt";
+
+const REC_V6_MEDIUM: &str = "models/PP-OCRv6_medium_rec.mnn";
+const CHARSET_V6_MEDIUM: &str = "models/ppocr_keys_v6_medium.txt";
 
 const REC_EN: &str = "models/en_PP-OCRv5_mobile_rec_infer.mnn";
 const CHARSET_EN: &str = "models/ppocr_keys_en.txt";
@@ -191,6 +203,21 @@ fn test_det_v4() {
     run_det_only(DET_V4, "det-v4");
 }
 
+#[test]
+fn test_det_v6_tiny() {
+    run_det_only(DET_V6_TINY, "det-v6-tiny");
+}
+
+#[test]
+fn test_det_v6_small() {
+    run_det_only(DET_V6_SMALL, "det-v6-small");
+}
+
+#[test]
+fn test_det_v6_medium() {
+    run_det_only(DET_V6_MEDIUM, "det-v6-medium");
+}
+
 // ============================================================
 // 识别模型测试（仅识别，使用 v5 det 做前置检测）
 // ============================================================
@@ -208,6 +235,21 @@ fn test_rec_v5_fp16() {
 #[test]
 fn test_rec_v4() {
     run_rec_only(REC_V4, CHARSET_V4, "rec-v4");
+}
+
+#[test]
+fn test_rec_v6_tiny() {
+    run_rec_only(REC_V6_TINY, CHARSET_V6_TINY, "rec-v6-tiny");
+}
+
+#[test]
+fn test_rec_v6_small() {
+    run_rec_only(REC_V6_SMALL, CHARSET_V6_SMALL, "rec-v6-small");
+}
+
+#[test]
+fn test_rec_v6_medium() {
+    run_rec_only(REC_V6_MEDIUM, CHARSET_V6_MEDIUM, "rec-v6-medium");
 }
 
 #[test]
@@ -287,6 +329,36 @@ fn test_pipeline_v5fp16_det_v5_rec() {
 #[test]
 fn test_pipeline_v4_det_v4_rec() {
     run_full_pipeline(DET_V4, REC_V4, CHARSET_V4, "pipeline-v4+v4");
+}
+
+#[test]
+fn test_pipeline_v6_tiny() {
+    run_full_pipeline(
+        DET_V6_TINY,
+        REC_V6_TINY,
+        CHARSET_V6_TINY,
+        "pipeline-v6-tiny",
+    );
+}
+
+#[test]
+fn test_pipeline_v6_small() {
+    run_full_pipeline(
+        DET_V6_SMALL,
+        REC_V6_SMALL,
+        CHARSET_V6_SMALL,
+        "pipeline-v6-small",
+    );
+}
+
+#[test]
+fn test_pipeline_v6_medium() {
+    run_full_pipeline(
+        DET_V6_MEDIUM,
+        REC_V6_MEDIUM,
+        CHARSET_V6_MEDIUM,
+        "pipeline-v6-medium",
+    );
 }
 
 #[test]
