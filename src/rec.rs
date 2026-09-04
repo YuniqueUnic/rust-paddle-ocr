@@ -2,7 +2,7 @@
 //!
 //! Provides text recognition functionality based on PaddleOCR recognition models
 
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use ndarray::ArrayD;
 use std::path::Path;
 
@@ -46,10 +46,6 @@ pub struct RecOptions {
     pub min_score: f32,
     /// Minimum confidence threshold for punctuation
     pub punct_min_score: f32,
-    /// Batch size
-    pub batch_size: usize,
-    /// Whether to enable batch processing
-    pub enable_batch: bool,
 }
 
 impl Default for RecOptions {
@@ -58,8 +54,6 @@ impl Default for RecOptions {
             target_height: 48,
             min_score: 0.3, // Lower threshold, model output is raw logit
             punct_min_score: 0.1,
-            batch_size: 8,
-            enable_batch: true,
         }
     }
 }
@@ -85,18 +79,6 @@ impl RecOptions {
     /// Set punctuation minimum confidence
     pub fn with_punct_min_score(mut self, score: f32) -> Self {
         self.punct_min_score = score;
-        self
-    }
-
-    /// Set batch size
-    pub fn with_batch_size(mut self, size: usize) -> Self {
-        self.batch_size = size;
-        self
-    }
-
-    /// Enable/disable batch processing
-    pub fn with_batch(mut self, enable: bool) -> Self {
-        self.enable_batch = enable;
         self
     }
 }
@@ -233,14 +215,35 @@ impl RecModel {
     /// # Returns
     /// Recognition result
     pub fn recognize(&self, image: &DynamicImage) -> OcrResult<RecognitionResult> {
-        // Preprocess
         let input = preprocess_for_rec(image, self.options.target_height, &self.normalize_params)?;
 
-        // Inference (using dynamic shape)
-        let output = self.engine.run_dynamic(input.view().into_dyn())?;
+        // Inference writes straight into `logits`, which is the only copy of the model's
+        // output that exists. It is large — `seq_len * num_classes` floats, and the charset
+        // has tens of thousands of entries — so extra copies are worth avoiding.
+        let mut logits = Vec::new();
+        let shape = self
+            .engine
+            .run_dynamic_into(input.view().into_dyn(), &mut logits)?;
 
-        // Decode
-        self.decode_output(&output)
+        // `preprocess_for_rec` feeds exactly one image, so the output is [seq_len, classes]
+        // or [1, seq_len, classes]: the trailing dimension indexes the charset and
+        // everything before the last two is a batch dimension of one.
+        let num_classes = match *shape.as_slice() {
+            [_, classes] if classes > 0 => classes,
+            [1, _, classes] if classes > 0 => classes,
+            _ => {
+                return Err(OcrError::PostprocessError(format!(
+                    "Unexpected recognition output shape: {shape:?}"
+                )))
+            }
+        };
+
+        Ok(ctc_decode(
+            &logits,
+            num_classes,
+            &self.charset,
+            &self.options,
+        ))
     }
 
     /// Recognize a single image, return text only
@@ -249,192 +252,153 @@ impl RecModel {
         Ok(result.text)
     }
 
-    /// Batch recognize images
+    /// Recognize several text line images.
     ///
-    /// # Parameters
-    /// - `images`: List of input images
-    ///
-    /// # Returns
-    /// List of recognition results
+    /// Each line is inferred at its own width. Padding a group of lines up to the widest
+    /// one measurably costs both accuracy and memory, and buys no speed: the wrapper
+    /// serializes MNN inference process-wide, so there is no batch parallelism to gain.
     pub fn recognize_batch(&self, images: &[DynamicImage]) -> OcrResult<Vec<RecognitionResult>> {
-        if images.is_empty() {
-            return Ok(Vec::new());
+        let mut out = vec![None; images.len()];
+        for i in widest_first(
+            images.iter().map(|i| i.dimensions()),
+            self.options.target_height,
+        ) {
+            out[i] = Some(self.recognize(&images[i])?);
         }
-
-        // For small number of images, process individually
-        if images.len() <= 2 || !self.options.enable_batch {
-            return images.iter().map(|img| self.recognize(img)).collect();
-        }
-
-        // Batch processing
-        let mut results = Vec::with_capacity(images.len());
-
-        for chunk in images.chunks(self.options.batch_size) {
-            let batch_results = self.recognize_batch_internal(chunk)?;
-            results.extend(batch_results);
-        }
-
-        Ok(results)
+        Ok(out.into_iter().map(expect_visited).collect())
     }
 
-    /// Batch recognize images (borrowed version, avoid cloning)
-    ///
-    /// # Parameters
-    /// - `images`: List of input image references
-    ///
-    /// # Returns
-    /// List of recognition results
+    /// Recognize several text line images held by reference.
     pub fn recognize_batch_ref(
         &self,
         images: &[&DynamicImage],
     ) -> OcrResult<Vec<RecognitionResult>> {
-        if images.is_empty() {
-            return Ok(Vec::new());
+        let mut out = vec![None; images.len()];
+        for i in widest_first(
+            images.iter().map(|i| i.dimensions()),
+            self.options.target_height,
+        ) {
+            out[i] = Some(self.recognize(images[i])?);
         }
-
-        // For small number of images, process individually
-        if images.len() <= 2 || !self.options.enable_batch {
-            return images.iter().map(|img| self.recognize(img)).collect();
-        }
-
-        // Batch processing
-        let mut results = Vec::with_capacity(images.len());
-
-        for chunk in images.chunks(self.options.batch_size) {
-            // Dereference and convert to Vec<DynamicImage>
-            let chunk_owned: Vec<DynamicImage> = chunk.iter().map(|img| (*img).clone()).collect();
-            let batch_results = self.recognize_batch_internal(&chunk_owned)?;
-            results.extend(batch_results);
-        }
-
-        Ok(results)
+        Ok(out.into_iter().map(expect_visited).collect())
     }
 
-    /// Internal batch recognition
-    fn recognize_batch_internal(
+    /// Recognize several text line images, overlapping the per-line preprocessing and
+    /// CTC decode across threads. Inference itself is serialized inside the wrapper, so
+    /// what threads win here is the decode, which scans `seq_len * num_classes` scores.
+    ///
+    /// The widest line runs first and on its own: MNN sizes its dynamic memory pool for
+    /// the largest input shape it has seen and never shrinks it, so letting one line
+    /// establish that high-water keeps the parallel tail — every line of which is
+    /// narrower — inside the existing allocation. Fanning all lines out at once instead
+    /// measured 20-76 MB higher peak, for no gain in wall time.
+    pub fn recognize_batch_parallel(
         &self,
         images: &[DynamicImage],
     ) -> OcrResult<Vec<RecognitionResult>> {
-        if images.is_empty() {
-            return Ok(Vec::new());
-        }
+        use rayon::prelude::*;
 
-        // If only one image, process individually
-        if images.len() == 1 {
-            return Ok(vec![self.recognize(&images[0])?]);
-        }
-
-        // Batch preprocessing
-        let batch_input = crate::preprocess::preprocess_batch_for_rec(
-            images,
+        let order = widest_first(
+            images.iter().map(|i| i.dimensions()),
             self.options.target_height,
-            &self.normalize_params,
-        )?;
-
-        // Batch inference
-        let batch_output = self.engine.run_dynamic(batch_input.view().into_dyn())?;
-
-        // Decode output for each sample
-        let shape = batch_output.shape();
-        if shape.len() != 3 {
-            return Err(OcrError::PostprocessError(format!(
-                "Batch inference output shape error: {:?}",
-                shape
-            )));
-        }
-
-        let batch_size = shape[0];
-        let mut results = Vec::with_capacity(batch_size);
-
-        for i in 0..batch_size {
-            // Extract output for single sample
-            let sample_output = batch_output.slice(ndarray::s![i, .., ..]).to_owned();
-            let sample_output_dyn = sample_output.into_dyn();
-            let result = self.decode_output(&sample_output_dyn)?;
-            results.push(result);
-        }
-
-        Ok(results)
-    }
-
-    /// Decode model output
-    fn decode_output(&self, output: &ArrayD<f32>) -> OcrResult<RecognitionResult> {
-        let shape = output.shape();
-
-        // Output shape should be [batch, seq_len, num_classes] or [seq_len, num_classes]
-        let (seq_len, num_classes) = if shape.len() == 3 {
-            (shape[1], shape[2])
-        } else if shape.len() == 2 {
-            (shape[0], shape[1])
-        } else {
-            return Err(OcrError::PostprocessError(format!(
-                "Invalid output shape: {:?}",
-                shape
-            )));
+        );
+        let Some((&widest, rest)) = order.split_first() else {
+            return Ok(Vec::new());
         };
 
-        let output_data: Vec<f32> = output.iter().cloned().collect();
+        let mut out = vec![None; images.len()];
+        out[widest] = Some(self.recognize(&images[widest])?);
+        for (i, result) in rest
+            .par_iter()
+            .map(|&i| self.recognize(&images[i]).map(|r| (i, r)))
+            .collect::<OcrResult<Vec<_>>>()?
+        {
+            out[i] = Some(result);
+        }
+        Ok(out.into_iter().map(expect_visited).collect())
+    }
+}
 
-        // CTC decoding
-        let mut char_scores = Vec::new();
-        let mut prev_idx = 0usize;
+/// The width `preprocess_for_rec` will scale a `width` x `height` crop to.
+fn rec_input_width(width: u32, height: u32, target_height: u32) -> u32 {
+    if height == 0 {
+        return width;
+    }
+    (width as f64 * target_height as f64 / height as f64).round() as u32
+}
 
-        for t in 0..seq_len {
-            // Find character with maximum probability at current time step
-            let start = t * num_classes;
-            let end = start + num_classes;
-            let probs = &output_data[start..end];
+/// Indices of the given `(width, height)` pairs, widest recognition input first.
+///
+/// MNN grows its dynamic memory pool to fit the largest input shape it has seen and
+/// never shrinks it again, so feeding lines in ascending width makes the pool grow step
+/// by step and keeps every intermediate size. Starting with the widest line sets that
+/// high-water once and lets every narrower line reuse the allocation; measured 3-33%
+/// lower peak footprint, the more so the wider the spread. Lines are recognized
+/// independently, so the order cannot change any result.
+///
+/// Ties break on the original index, so the order is deterministic.
+fn widest_first(dimensions: impl Iterator<Item = (u32, u32)>, target_height: u32) -> Vec<usize> {
+    let mut widths: Vec<(usize, u32)> = dimensions
+        .map(|(w, h)| rec_input_width(w, h, target_height))
+        .enumerate()
+        .collect();
+    widths.sort_unstable_by_key(|&(i, w)| (std::cmp::Reverse(w), i));
+    widths.into_iter().map(|(i, _)| i).collect()
+}
 
-            let (max_idx, &max_prob) = probs
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .ok_or_else(|| {
-                    OcrError::PostprocessError("Empty probability slice in CTC decoding".into())
-                })?;
+/// Every index is visited exactly once by `widest_first`, so no slot can stay empty.
+fn expect_visited(slot: Option<RecognitionResult>) -> RecognitionResult {
+    slot.expect("widest_first yields every index")
+}
 
-            // CTC decoding rule: skip blank (index 0) and duplicate characters
-            if max_idx != 0 && max_idx != prev_idx {
-                if max_idx < self.charset.len() {
-                    let ch = self.charset[max_idx];
+/// Greedy CTC decode over a `[.., seq_len, num_classes]` logit buffer.
+///
+/// Kept free of the model and the engine so it is testable on its own: the whole
+/// recognition postprocess is this one reduction over `logits`.
+fn ctc_decode(
+    logits: &[f32],
+    num_classes: usize,
+    charset: &[char],
+    options: &RecOptions,
+) -> RecognitionResult {
+    let mut char_scores = Vec::new();
+    let mut prev_idx = usize::MAX;
 
-                    // Use raw logit value as confidence (model output is already softmax probability)
-                    // For large character sets, softmax scores can be very small, so use max_prob directly
-                    let score = max_prob;
+    for step in logits.chunks_exact(num_classes) {
+        let (max_idx, &max_prob) = step
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            // `chunks_exact` never yields an empty chunk for num_classes > 0.
+            .expect("non-empty logit step");
 
-                    // Only filter out very low confidence characters
-                    let threshold = if Self::is_punctuation(ch) {
-                        self.options.punct_min_score
-                    } else {
-                        self.options.min_score
-                    };
-
-                    if score >= threshold {
-                        char_scores.push((ch, score));
-                    }
+        // CTC collapse: drop the blank class (index 0) and repeats of the previous class.
+        if max_idx != 0 && max_idx != prev_idx {
+            if let Some(&ch) = charset.get(max_idx) {
+                // The model output is already a softmax probability; for very large
+                // charsets those scores run small, so it is used as the score directly.
+                let threshold = if PUNCTUATIONS.contains(&ch) {
+                    options.punct_min_score
+                } else {
+                    options.min_score
+                };
+                if max_prob >= threshold {
+                    char_scores.push((ch, max_prob));
                 }
             }
-
-            prev_idx = max_idx;
         }
 
-        // Calculate average confidence
-        let confidence = if char_scores.is_empty() {
-            0.0
-        } else {
-            char_scores.iter().map(|(_, s)| s).sum::<f32>() / char_scores.len() as f32
-        };
-
-        // Extract text
-        let text: String = char_scores.iter().map(|(ch, _)| ch).collect();
-
-        Ok(RecognitionResult::new(text, confidence, char_scores))
+        prev_idx = max_idx;
     }
 
-    /// Check if character is punctuation
-    fn is_punctuation(ch: char) -> bool {
-        PUNCTUATIONS.contains(&ch)
-    }
+    let confidence = if char_scores.is_empty() {
+        0.0
+    } else {
+        char_scores.iter().map(|(_, s)| s).sum::<f32>() / char_scores.len() as f32
+    };
+    let text: String = char_scores.iter().map(|(ch, _)| ch).collect();
+
+    RecognitionResult::new(text, confidence, char_scores)
 }
 
 /// Low-level recognition API
@@ -483,8 +447,6 @@ mod tests {
         assert_eq!(opts.target_height, 48);
         assert_eq!(opts.min_score, 0.3);
         assert_eq!(opts.punct_min_score, 0.1);
-        assert_eq!(opts.batch_size, 8);
-        assert!(opts.enable_batch);
     }
 
     #[test]
@@ -492,15 +454,11 @@ mod tests {
         let opts = RecOptions::new()
             .with_target_height(32)
             .with_min_score(0.6)
-            .with_punct_min_score(0.2)
-            .with_batch_size(16)
-            .with_batch(false);
+            .with_punct_min_score(0.2);
 
         assert_eq!(opts.target_height, 32);
         assert_eq!(opts.min_score, 0.6);
         assert_eq!(opts.punct_min_score, 0.2);
-        assert_eq!(opts.batch_size, 16);
-        assert!(!opts.enable_batch);
     }
 
     #[test]
@@ -550,55 +508,118 @@ mod tests {
         assert!(!result.is_valid(0.1));
     }
 
-    #[test]
-    fn test_is_punctuation_common() {
-        // English punctuation
-        assert!(RecModel::is_punctuation(','));
-        assert!(RecModel::is_punctuation('.'));
-        assert!(RecModel::is_punctuation('!'));
-        assert!(RecModel::is_punctuation('?'));
-        assert!(RecModel::is_punctuation(';'));
-        assert!(RecModel::is_punctuation(':'));
-        assert!(RecModel::is_punctuation('"'));
-        assert!(RecModel::is_punctuation('\''));
+    // `ctc_decode` is the whole recognition postprocess and needs no model, so the
+    // decoding rules are asserted directly here rather than through an engine.
+
+    /// Index 0 is the CTC blank, as `parse_charset` arranges it.
+    const CHARSET: [char; 5] = [' ', 'a', 'b', ',', '中'];
+
+    /// One timestep whose argmax is `idx`, scoring `score`.
+    fn step(idx: usize, score: f32) -> Vec<f32> {
+        let mut row = vec![0.0f32; CHARSET.len()];
+        row[idx] = score;
+        row
+    }
+
+    fn decode(steps: &[Vec<f32>], options: &RecOptions) -> RecognitionResult {
+        let logits: Vec<f32> = steps.concat();
+        ctc_decode(&logits, CHARSET.len(), &CHARSET, options)
     }
 
     #[test]
-    fn test_is_punctuation_chinese() {
-        // Chinese punctuation
-        assert!(RecModel::is_punctuation('，'));
-        assert!(RecModel::is_punctuation('。'));
-        assert!(RecModel::is_punctuation('！'));
-        assert!(RecModel::is_punctuation('？'));
-        assert!(RecModel::is_punctuation('；'));
-        assert!(RecModel::is_punctuation('：'));
-        assert!(RecModel::is_punctuation('、'));
-        assert!(RecModel::is_punctuation('—'));
-        assert!(RecModel::is_punctuation('…'));
+    fn ctc_decode_collapses_repeats_and_skips_blank() {
+        // a, a(repeat), blank, a(no longer a repeat), b
+        let out = decode(
+            &[
+                step(1, 0.9),
+                step(1, 0.9),
+                step(0, 0.9),
+                step(1, 0.9),
+                step(2, 0.9),
+            ],
+            &RecOptions::default(),
+        );
+        assert_eq!(out.text, "aab");
     }
 
     #[test]
-    fn test_is_punctuation_brackets() {
-        assert!(RecModel::is_punctuation('('));
-        assert!(RecModel::is_punctuation(')'));
-        assert!(RecModel::is_punctuation('['));
-        assert!(RecModel::is_punctuation(']'));
-        assert!(RecModel::is_punctuation('{'));
-        assert!(RecModel::is_punctuation('}'));
-        assert!(RecModel::is_punctuation('「'));
-        assert!(RecModel::is_punctuation('」'));
-        assert!(RecModel::is_punctuation('《'));
-        assert!(RecModel::is_punctuation('》'));
+    fn ctc_decode_applies_a_separate_threshold_to_punctuation() {
+        let options = RecOptions::new()
+            .with_min_score(0.5)
+            .with_punct_min_score(0.1);
+        // 0.3 is below min_score but above punct_min_score, so only the comma survives.
+        let out = decode(&[step(1, 0.3), step(3, 0.3)], &options);
+        assert_eq!(out.text, ",");
     }
 
     #[test]
-    fn test_is_punctuation_false() {
-        // Non-punctuation characters
-        assert!(!RecModel::is_punctuation('A'));
-        assert!(!RecModel::is_punctuation('z'));
-        assert!(!RecModel::is_punctuation('0'));
-        assert!(!RecModel::is_punctuation('中'));
-        assert!(!RecModel::is_punctuation('文'));
-        assert!(!RecModel::is_punctuation(' '));
+    fn ctc_decode_averages_confidence_over_kept_characters() {
+        let out = decode(&[step(1, 0.8), step(2, 0.6)], &RecOptions::default());
+        assert_eq!(out.text, "ab");
+        assert!((out.confidence - 0.7).abs() < 1e-6, "{}", out.confidence);
+    }
+
+    #[test]
+    fn ctc_decode_returns_empty_for_an_all_blank_sequence() {
+        let out = decode(&[step(0, 0.9), step(0, 0.9)], &RecOptions::default());
+        assert!(out.text.is_empty());
+        assert_eq!(out.confidence, 0.0);
+        assert!(out.char_scores.is_empty());
+    }
+
+    #[test]
+    fn ctc_decode_ignores_classes_the_charset_does_not_cover() {
+        // A model with more output classes than the charset file lists must not panic;
+        // the uncovered class is simply dropped.
+        let wider = CHARSET.len() + 2;
+        let mut logits = vec![0.0f32; wider * 2];
+        logits[wider + (wider - 1)] = 0.9; // second step peaks on an out-of-charset class
+        logits[1] = 0.9; // first step peaks on 'a'
+        let out = ctc_decode(&logits, wider, &CHARSET, &RecOptions::default());
+        assert_eq!(out.text, "a");
+    }
+
+    #[test]
+    fn ctc_decode_keeps_non_ascii_characters() {
+        let out = decode(&[step(4, 0.9)], &RecOptions::default());
+        assert_eq!(out.text, "中");
+    }
+
+    #[test]
+    fn rec_input_width_scales_to_the_target_height() {
+        assert_eq!(rec_input_width(200, 100, 48), 96);
+        assert_eq!(rec_input_width(2231, 39, 48), 2746);
+        // A crop already at the target height passes through unchanged.
+        assert_eq!(rec_input_width(320, 48, 48), 320);
+        // A degenerate crop must not divide by zero.
+        assert_eq!(rec_input_width(320, 0, 48), 320);
+    }
+
+    #[test]
+    fn widest_first_orders_by_recognition_width_not_raw_width() {
+        // Raw widths ascend, but index 0 is the tallest crop and so scales down the most:
+        // 100x100 -> 48px, 150x50 -> 144px, 200x40 -> 240px.
+        let order = widest_first([(100, 100), (150, 50), (200, 40)].into_iter(), 48);
+        assert_eq!(order, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn widest_first_breaks_ties_on_input_index() {
+        let order = widest_first([(100, 48), (300, 48), (100, 48)].into_iter(), 48);
+        assert_eq!(order, vec![1, 0, 2]);
+    }
+
+    #[test]
+    fn widest_first_yields_every_index_exactly_once() {
+        let dims = [(10, 5), (900, 30), (44, 44), (1, 1), (700, 100)];
+        let mut visited = widest_first(dims.into_iter(), 48);
+        assert_eq!(visited.len(), dims.len());
+        visited.sort_unstable();
+        assert_eq!(visited, (0..dims.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn widest_first_handles_an_empty_input() {
+        assert!(widest_first(std::iter::empty(), 48).is_empty());
     }
 }

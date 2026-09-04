@@ -202,41 +202,24 @@ impl OriModel {
             &self.normalize_params,
         )?;
 
-        let output = self.engine.run_dynamic(input.view().into_dyn())?;
-        self.decode_output(&output)
+        let mut logits = Vec::new();
+        let shape = self
+            .engine
+            .run_dynamic_into(input.view().into_dyn(), &mut logits)?;
+        self.decode_output(&logits, &shape)
     }
 
-    fn decode_output(&self, output: &ArrayD<f32>) -> OcrResult<OrientationResult> {
-        let shape = output.shape();
-        if shape.is_empty() {
-            return Err(OcrError::PostprocessError(
-                "Orientation model output shape is empty".to_string(),
-            ));
+    fn decode_output(&self, logits: &[f32], shape: &[usize]) -> OcrResult<OrientationResult> {
+        // Only the first sample's class scores are used; the model classifies one image.
+        let num_classes = shape.last().copied().unwrap_or(0);
+        if num_classes == 0 || logits.len() < num_classes {
+            return Err(OcrError::PostprocessError(format!(
+                "Unexpected orientation output shape: {shape:?} for {} values",
+                logits.len()
+            )));
         }
 
-        let num_classes = *shape.last().unwrap_or(&0);
-        if num_classes == 0 {
-            return Err(OcrError::PostprocessError(
-                "Orientation model output classes is zero".to_string(),
-            ));
-        }
-
-        let output_data: Vec<f32> = output.iter().cloned().collect();
-        if output_data.is_empty() {
-            return Err(OcrError::PostprocessError(
-                "Orientation model output data is empty".to_string(),
-            ));
-        }
-
-        let scores_raw = if output_data.len() >= num_classes {
-            output_data[..num_classes].to_vec()
-        } else {
-            return Err(OcrError::PostprocessError(
-                "Orientation model output data size mismatch".to_string(),
-            ));
-        };
-
-        let scores = softmax(&scores_raw);
+        let scores = softmax(&logits[..num_classes]);
         let (class_idx, &confidence) = scores
             .iter()
             .enumerate()

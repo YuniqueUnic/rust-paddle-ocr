@@ -404,18 +404,12 @@ impl OcrEngine {
             return Ok(Vec::new());
         }
 
-        // 2. Batch recognition
+        // 2. Recognize each region at its own width.
         let (images, boxes): (Vec<DynamicImage>, Vec<TextBox>) = detections.into_iter().unzip();
 
-        let rec_results = if self.config.enable_parallel && images.len() > 4 {
-            // Parallel recognition: for multiple text regions, use rayon for parallel processing
-            use rayon::prelude::*;
-            images
-                .par_iter()
-                .map(|img| self.rec_model.recognize(img))
-                .collect::<OcrResult<Vec<_>>>()?
+        let rec_results = if self.config.enable_parallel {
+            self.rec_model.recognize_batch_parallel(&images)?
         } else {
-            // Sequential recognition: use batch inference
             self.rec_model.recognize_batch(&images)?
         };
 

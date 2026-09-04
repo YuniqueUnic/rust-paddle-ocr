@@ -828,6 +828,9 @@ fn bind_gen(manifest_dir: &PathBuf, mnn_include_dirs: &[PathBuf], os: &str, arch
         .allowlist_function("mnnr_.*")
         .allowlist_type("MNN.*")
         .allowlist_type("MNNR.*")
+        // Shared limits such as MNNR_MAX_DIMS, so Rust sizes its shape buffers from the
+        // same constant the C++ side validates against.
+        .allowlist_var("MNNR_.*")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false);
 

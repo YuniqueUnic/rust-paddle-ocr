@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // 2. 创建识别模型
     println!("加载识别模型...");
-    let rec_options = RecOptions::new().with_min_score(0.5).with_batch_size(8);
+    let rec_options = RecOptions::new().with_min_score(0.5);
 
     let rec_model = RecModel::from_file(rec_model_path, charset_path, Some(inference_config))?
         .with_options(rec_options);

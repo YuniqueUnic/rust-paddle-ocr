@@ -14,7 +14,7 @@ pub use docsrs_stub::*;
 mod normal_impl {
 
     use ndarray::{ArrayD, ArrayViewD, IxDyn};
-    use std::ffi::CStr;
+    use std::ffi::{c_void, CStr};
     use std::ptr::NonNull;
 
     #[allow(non_camel_case_types)]
@@ -237,6 +237,27 @@ mod normal_impl {
     unsafe impl Sync for SharedRuntime {}
 
     // ============== Helper Functions ==============
+
+    /// Lends a caller-owned `Vec` to the C++ wrapper as the inference output buffer.
+    ///
+    /// Only capacity is reserved from the callback; the length is set after the FFI call
+    /// reports success, so the `Vec` is never observable holding uninitialized elements.
+    struct OutputSink<'a> {
+        out: &'a mut Vec<f32>,
+        len: usize,
+    }
+
+    unsafe extern "C" fn reserve_output(ctx: *mut c_void, n_floats: usize) -> *mut f32 {
+        let sink = &mut *(ctx as *mut OutputSink<'_>);
+        sink.out.clear();
+        // Returning null tells the wrapper to fail with OUT_OF_MEMORY, which is the only
+        // way to report failure without unwinding across the FFI boundary.
+        if sink.out.try_reserve_exact(n_floats).is_err() {
+            return std::ptr::null_mut();
+        }
+        sink.len = n_floats;
+        sink.out.as_mut_ptr()
+    }
 
     fn get_last_error_message(engine: Option<*const ffi::MNN_InferenceEngine>) -> String {
         match engine {
@@ -489,25 +510,27 @@ mod normal_impl {
                 || self.output_shape.iter().any(|&d| d > 100000)
         }
 
-        /// Execute dynamic shape inference
+        /// Execute dynamic shape inference, writing the NCHW result into `out`.
         ///
-        /// Suitable for models where input shape changes at runtime (such as detection models).
-        /// This function adjusts model input tensor shape before running.
-        ///
-        /// # Parameters
-        /// - `input_data`: Input data array
+        /// Suitable for models where input shape changes at runtime (such as the detection
+        /// and recognition models, whose input width follows the image). MNN converts its
+        /// result directly into `out`, so this is the only copy of the output that exists.
+        /// Reusing one buffer across calls also reuses its allocation.
         ///
         /// # Returns
-        /// Inference result array, shape dynamically determined by model
-        pub fn run_dynamic(&self, input_data: ArrayViewD<f32>) -> Result<ArrayD<f32>> {
+        /// The output shape, dynamically determined by the model.
+        pub fn run_dynamic_into(
+            &self,
+            input_data: ArrayViewD<f32>,
+            out: &mut Vec<f32>,
+        ) -> Result<Vec<usize>> {
             let input_shape: Vec<usize> = input_data.shape().to_vec();
             let input_slice = input_data.as_slice().ok_or_else(|| {
                 MnnError::InvalidParameter("Input data must be contiguous".to_string())
             })?;
 
-            let mut output_data: *mut f32 = std::ptr::null_mut();
-            let mut output_size: usize = 0;
-            let mut output_dims = [0usize; 8];
+            let mut sink = OutputSink { out, len: 0 };
+            let mut output_dims = [0usize; ffi::MNNR_MAX_DIMS as usize];
             let mut output_ndims: usize = 0;
 
             let error_code = unsafe {
@@ -516,8 +539,8 @@ mod normal_impl {
                     input_slice.as_ptr(),
                     input_shape.as_ptr(),
                     input_shape.len(),
-                    &mut output_data,
-                    &mut output_size,
+                    Some(reserve_output),
+                    &mut sink as *mut _ as *mut c_void,
                     output_dims.as_mut_ptr(),
                     &mut output_ndims,
                 )
@@ -536,68 +559,30 @@ mod normal_impl {
                 };
             }
 
-            // Copy output data and free C buffer
-            let output_shape: Vec<usize> = output_dims[..output_ndims].to_vec();
-            let output_buffer = unsafe {
-                let slice = std::slice::from_raw_parts(output_data, output_size);
-                let buffer = slice.to_vec();
-                ffi::mnnr_free_output(output_data);
-                buffer
-            };
-
-            ArrayD::from_shape_vec(IxDyn(&output_shape), output_buffer).map_err(|e| {
-                MnnError::RuntimeError(format!("Failed to create output array: {}", e))
-            })
-        }
-
-        /// Execute dynamic shape inference (using raw slices)
-        ///
-        /// Low-level API, caller is responsible for managing output buffer
-        pub fn run_dynamic_raw(
-            &self,
-            input: &[f32],
-            input_shape: &[usize],
-        ) -> Result<(Vec<f32>, Vec<usize>)> {
-            let mut output_data: *mut f32 = std::ptr::null_mut();
-            let mut output_size: usize = 0;
-            let mut output_dims = [0usize; 8];
-            let mut output_ndims: usize = 0;
-
-            let error_code = unsafe {
-                ffi::mnnr_run_inference_dynamic(
-                    self.ptr.as_ptr(),
-                    input.as_ptr(),
-                    input_shape.as_ptr(),
-                    input_shape.len(),
-                    &mut output_data,
-                    &mut output_size,
-                    output_dims.as_mut_ptr(),
-                    &mut output_ndims,
-                )
-            };
-
-            if error_code != ffi::MNNR_ErrorCode_MNNR_SUCCESS {
-                return match error_code {
-                    ffi::MNNR_ErrorCode_MNNR_ERROR_INVALID_PARAMETER => Err(
-                        MnnError::InvalidParameter(get_last_error_message(Some(self.ptr.as_ptr()))),
-                    ),
-                    ffi::MNNR_ErrorCode_MNNR_ERROR_OUT_OF_MEMORY => Err(MnnError::OutOfMemory),
-                    _ => Err(MnnError::RuntimeError(get_last_error_message(Some(
-                        self.ptr.as_ptr(),
-                    )))),
-                };
+            if output_ndims > output_dims.len() {
+                return Err(MnnError::RuntimeError(format!(
+                    "Output rank {output_ndims} exceeds {}",
+                    output_dims.len()
+                )));
             }
 
-            // Copy output and free C buffer
-            let output_shape = output_dims[..output_ndims].to_vec();
-            let output_buffer = unsafe {
-                let slice = std::slice::from_raw_parts(output_data, output_size);
-                let buffer = slice.to_vec();
-                ffi::mnnr_free_output(output_data);
-                buffer
-            };
+            // SAFETY: the wrapper reported success, so it wrote `sink.len` floats into the
+            // capacity `reserve_output` handed it.
+            unsafe { sink.out.set_len(sink.len) };
 
-            Ok((output_buffer, output_shape))
+            Ok(output_dims[..output_ndims].to_vec())
+        }
+
+        /// Execute dynamic shape inference, allocating the output array.
+        ///
+        /// Prefer [`Self::run_dynamic_into`] when the output only needs to be read once;
+        /// this wrapper exists for callers that want an owned [`ArrayD`].
+        pub fn run_dynamic(&self, input_data: ArrayViewD<f32>) -> Result<ArrayD<f32>> {
+            let mut out = Vec::new();
+            let shape = self.run_dynamic_into(input_data, &mut out)?;
+            ArrayD::from_shape_vec(IxDyn(&shape), out).map_err(|e| {
+                MnnError::RuntimeError(format!("Failed to create output array: {}", e))
+            })
         }
     }
 

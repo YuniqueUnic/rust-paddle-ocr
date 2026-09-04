@@ -250,23 +250,29 @@ impl DetModel {
         // Preprocess
         let input = preprocess_for_det(&scaled, &self.normalize_params)?;
 
-        // Inference (using dynamic shape)
-        let output = self.engine.run_dynamic(input.view().into_dyn())?;
+        // Inference writes straight into `mask`, so this is the only copy of the
+        // segmentation map that exists.
+        let mut mask = Vec::new();
+        let shape = self
+            .engine
+            .run_dynamic_into(input.view().into_dyn(), &mut mask)?;
 
-        // Post-processing - output shape matches input (including padding)
-        let output_shape = output.shape();
-        let out_w = output_shape[3] as u32;
-        let out_h = output_shape[2] as u32;
+        // Output is [1, 1, H, W], matching the padded input.
+        let &[_, _, out_h, out_w] = shape.as_slice() else {
+            return Err(OcrError::PostprocessError(format!(
+                "Unexpected detection output shape: {shape:?}"
+            )));
+        };
 
         let boxes = self.postprocess_output(
-            &output,
-            out_w,
-            out_h,
+            &mask,
+            out_w as u32,
+            out_h as u32,
             scaled_width,
             scaled_height,
             original_width,
             original_height,
-        )?;
+        );
 
         Ok(boxes)
     }
@@ -291,27 +297,15 @@ impl DetModel {
     /// Post-process inference output
     fn postprocess_output(
         &self,
-        output: &ArrayD<f32>,
+        mask: &[f32],
         out_w: u32,
         out_h: u32,
         scaled_width: u32,
         scaled_height: u32,
         original_width: u32,
         original_height: u32,
-    ) -> OcrResult<Vec<TextBox>> {
-        // Retrieve output data
-        let output_shape = output.shape();
-        if output_shape.len() < 3 {
-            return Err(OcrError::PostprocessError(
-                "Detection model output shape invalid".to_string(),
-            ));
-        }
-
-        // Extract segmentation mask (only valid region, remove padding)
-        let mask_data: Vec<f32> = output.iter().cloned().collect();
-
-        // Binarization
-        let binary_mask: Vec<u8> = mask_data
+    ) -> Vec<TextBox> {
+        let binary_mask: Vec<u8> = mask
             .iter()
             .map(|&v| {
                 if v > self.options.score_threshold {
@@ -324,7 +318,7 @@ impl DetModel {
 
         // Extract bounding boxes (with unclip expansion)
         // DB algorithm needs to expand detected contours because model output segmentation mask is usually smaller than actual text region
-        let boxes = extract_boxes_with_unclip(
+        extract_boxes_with_unclip(
             &binary_mask,
             out_w,
             out_h,
@@ -334,9 +328,7 @@ impl DetModel {
             original_height,
             self.options.min_area,
             self.options.unclip_ratio,
-        );
-
-        Ok(boxes)
+        )
     }
 }
 

@@ -201,53 +201,6 @@ pub fn preprocess_for_rec(
     Ok(input)
 }
 
-/// Batch preprocess recognition images
-///
-/// Process multiple images into batch tensor, all images padded to same width
-pub fn preprocess_batch_for_rec(
-    images: &[DynamicImage],
-    target_height: u32,
-    params: &NormalizeParams,
-) -> OcrResult<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>> {
-    if images.is_empty() {
-        return Ok(Array4::<f32>::zeros((0, 3, target_height as usize, 0)));
-    }
-
-    // Calculate scaled width for all images
-    let widths: Vec<u32> = images
-        .iter()
-        .map(|img| {
-            let (w, h) = img.dimensions();
-            let scale = target_height as f64 / h as f64;
-            (w as f64 * scale).round() as u32
-        })
-        .collect();
-
-    // widths is non-empty because images is non-empty (checked above)
-    let max_width = *widths.iter().max().unwrap() as usize;
-    let batch_size = images.len();
-
-    let mut batch = Array4::<f32>::zeros((batch_size, 3, target_height as usize, max_width));
-
-    for (i, (img, &w)) in images.iter().zip(widths.iter()).enumerate() {
-        let resized = resize_to_height(img, target_height)?;
-        let rgb_img = resized.to_rgb8();
-
-        for y in 0..target_height as usize {
-            for x in 0..w as usize {
-                let pixel = rgb_img.get_pixel(x as u32, y as u32);
-                let [r, g, b] = pixel.0;
-
-                batch[[i, 0, y, x]] = (r as f32 / 255.0 - params.mean[0]) / params.std[0];
-                batch[[i, 1, y, x]] = (g as f32 / 255.0 - params.mean[1]) / params.std[1];
-                batch[[i, 2, y, x]] = (b as f32 / 255.0 - params.mean[2]) / params.std[2];
-            }
-        }
-    }
-
-    Ok(batch)
-}
-
 /// Crop image region
 pub fn crop_image(img: &DynamicImage, x: u32, y: u32, width: u32, height: u32) -> DynamicImage {
     img.crop_imm(x, y, width, height)
@@ -434,42 +387,6 @@ mod tests {
         assert_eq!(tensor.shape()[2], 48);
         // 宽度应该按比例缩放: 200 * 48/100 = 96
         assert_eq!(tensor.shape()[3], 96);
-    }
-
-    #[test]
-    fn test_preprocess_batch_for_rec_empty() {
-        let images: Vec<DynamicImage> = vec![];
-        let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_batch_for_rec(&images, 48, &params).unwrap();
-
-        assert_eq!(tensor.shape()[0], 0);
-    }
-
-    #[test]
-    fn test_preprocess_batch_for_rec_single() {
-        let images = vec![DynamicImage::new_rgb8(200, 100)];
-        let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_batch_for_rec(&images, 48, &params).unwrap();
-
-        assert_eq!(tensor.shape()[0], 1);
-        assert_eq!(tensor.shape()[1], 3);
-        assert_eq!(tensor.shape()[2], 48);
-    }
-
-    #[test]
-    fn test_preprocess_batch_for_rec_multiple() {
-        let images = vec![
-            DynamicImage::new_rgb8(200, 100),
-            DynamicImage::new_rgb8(300, 100),
-        ];
-        let params = NormalizeParams::paddle_rec();
-        let tensor = preprocess_batch_for_rec(&images, 48, &params).unwrap();
-
-        assert_eq!(tensor.shape()[0], 2);
-        assert_eq!(tensor.shape()[1], 3);
-        assert_eq!(tensor.shape()[2], 48);
-        // 宽度应该是最大宽度: max(96, 144) = 144
-        assert_eq!(tensor.shape()[3], 144);
     }
 
     #[test]

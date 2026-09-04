@@ -218,12 +218,11 @@ impl InferenceEngine {
         unimplemented!()
     }
 
-    /// Perform inference (raw interface)
-    pub fn run_dynamic_raw(
+    /// Perform inference (variable input shape) into a caller-owned buffer
+    pub fn run_dynamic_into(
         &self,
-        _input_data: &[f32],
-        _input_shape: &[usize],
-        _output_data: &mut [f32],
+        _input: ArrayViewD<f32>,
+        _out: &mut Vec<f32>,
     ) -> Result<Vec<usize>> {
         unimplemented!()
     }

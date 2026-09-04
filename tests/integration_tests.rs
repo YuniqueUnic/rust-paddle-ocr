@@ -26,6 +26,54 @@ fn test_image_exists() -> bool {
     std::path::Path::new(TEST_IMAGE_PATH).exists()
 }
 
+/// 页面截图：文本区域的识别输入宽度跨度很大（约 120px 到 2700px），
+/// 这正是批量入口内部排序能被观察到的条件。
+const WIDE_SPREAD_IMAGE_PATH: &str = "res/2.png";
+
+#[test]
+fn recognition_paths_agree_regardless_of_internal_ordering() {
+    if !models_exist() || !std::path::Path::new(WIDE_SPREAD_IMAGE_PATH).exists() {
+        eprintln!("跳过测试：模型或测试图像不存在");
+        return;
+    }
+
+    let det = DetModel::from_file(DET_MODEL_PATH, None).unwrap();
+    let rec = RecModel::from_file(REC_MODEL_PATH, CHARSET_PATH, None).unwrap();
+    let image = image::open(WIDE_SPREAD_IMAGE_PATH).unwrap();
+
+    let crops: Vec<_> = det
+        .detect_and_crop(&image)
+        .unwrap()
+        .into_iter()
+        .map(|(img, _)| img)
+        .collect();
+    assert!(crops.len() > 4, "需要多个文本区域才能验证顺序无关性");
+
+    // 批量入口内部先识别最宽的区域，以免 MNN 的内存池逐步增长。
+    // 那只是内部顺序：结果必须仍按输入顺序返回，且与逐个识别完全一致。
+    let scored = |results: &[ocr_rs::RecognitionResult]| -> Vec<(String, f32)> {
+        results
+            .iter()
+            .map(|r| (r.text.clone(), r.confidence))
+            .collect()
+    };
+
+    let one_at_a_time: Vec<_> = crops.iter().map(|c| rec.recognize(c).unwrap()).collect();
+    let expected = scored(&one_at_a_time);
+
+    assert_eq!(scored(&rec.recognize_batch(&crops).unwrap()), expected);
+    assert_eq!(
+        scored(&rec.recognize_batch_parallel(&crops).unwrap()),
+        expected
+    );
+
+    let borrowed: Vec<&image::DynamicImage> = crops.iter().collect();
+    assert_eq!(
+        scored(&rec.recognize_batch_ref(&borrowed).unwrap()),
+        expected
+    );
+}
+
 #[test]
 fn test_det_model_creation() {
     if !models_exist() {
@@ -92,7 +140,7 @@ fn test_rec_model_with_options() {
     }
 
     let rec = RecModel::from_file(REC_MODEL_PATH, CHARSET_PATH, None)
-        .map(|r| r.with_options(RecOptions::new().with_min_score(0.5).with_batch_size(4)));
+        .map(|r| r.with_options(RecOptions::new().with_min_score(0.5)));
 
     assert!(rec.is_ok(), "配置识别模型失败: {:?}", rec.err());
 }
@@ -120,8 +168,7 @@ fn test_ocr_engine_with_config() {
         .with_det_options(DetOptions::fast())
         .with_rec_options(RecOptions::new().with_min_score(0.3));
 
-    let engine =
-        OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
+    let engine = OcrEngine::new(DET_MODEL_PATH, REC_MODEL_PATH, CHARSET_PATH, Some(config));
     assert!(engine.is_ok(), "配置 OCR 引擎失败: {:?}", engine.err());
 }
 

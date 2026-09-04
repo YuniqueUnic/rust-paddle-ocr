@@ -10,6 +10,10 @@ extern "C"
 {
 #endif
 
+    // Maximum tensor rank the shape-reporting APIs can carry.
+    // Callers size their `output_dims` arrays with this.
+#define MNNR_MAX_DIMS 8
+
     // Opaque handles
     typedef struct MNN_InferenceEngine MNN_InferenceEngine;
     typedef struct MNN_SessionPool MNN_SessionPool;
@@ -157,23 +161,27 @@ extern "C"
 
     // ============== Dynamic Shape API ==============
 
-    // Run inference with dynamic input shape
-    // input_dims: array of input dimensions
-    // input_ndims: number of input dimensions
-    // output_dims: output array for result dimensions (at least 8 elements)
+    // Called once the output shape is known, to obtain storage for the result.
+    // Must return a pointer to at least `n_floats` writable floats, or NULL to abort.
+    // Letting the caller own the buffer keeps the result to a single copy: MNN converts
+    // straight into it instead of via an intermediate host tensor.
+    typedef float *(*MNNR_OutputSink)(void *ctx, size_t n_floats);
+
+    // Run inference with dynamic input shape.
+    // input_dims:   array of input dimensions
+    // input_ndims:  number of input dimensions
+    // sink/sink_ctx: supplies the destination buffer once the output shape is known
+    // output_dims:  output array for result dimensions (at least 8 elements)
     // output_ndims: output for number of result dimensions
     MNNR_ErrorCode mnnr_run_inference_dynamic(
         MNN_InferenceEngine *engine,
         const float *input_data,
         const size_t *input_dims,
         size_t input_ndims,
-        float **output_data,
-        size_t *output_size,
+        MNNR_OutputSink sink,
+        void *sink_ctx,
         size_t *output_dims,
         size_t *output_ndims);
-
-    // Free output buffer allocated by mnnr_run_inference_dynamic
-    void mnnr_free_output(float *output_data);
 
 #ifdef __cplusplus
 }
