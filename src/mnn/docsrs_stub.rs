@@ -20,6 +20,8 @@ pub enum MnnError {
     Unsupported,
     /// Model loading failed
     ModelLoadFailed(String),
+    /// Requested inference backend is not available in the linked MNN build
+    BackendUnavailable(String),
     /// Null pointer error
     NullPointer,
     /// Shape mismatch
@@ -60,6 +62,26 @@ pub enum Backend {
     CUDA,
     /// CoreML (macOS/iOS)
     CoreML,
+}
+
+impl Backend {
+    /// Stable backend name used in errors, logs, and command-line options.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Backend::CPU => "cpu",
+            Backend::Metal => "metal",
+            Backend::OpenCL => "opencl",
+            Backend::OpenGL => "opengl",
+            Backend::Vulkan => "vulkan",
+            Backend::CUDA => "cuda",
+            Backend::CoreML => "coreml",
+        }
+    }
+
+    /// Runtime availability cannot be inspected while generating docs.
+    pub const fn is_available(self) -> bool {
+        matches!(self, Backend::CPU)
+    }
 }
 
 /// Precision mode
@@ -218,11 +240,12 @@ impl InferenceEngine {
         unimplemented!()
     }
 
-    /// Perform inference (variable input shape) into a caller-owned buffer
-    pub fn run_dynamic_into(
+    /// Perform inference (raw interface)
+    pub fn run_dynamic_raw(
         &self,
-        _input: ArrayViewD<f32>,
-        _out: &mut Vec<f32>,
+        _input_data: &[f32],
+        _input_shape: &[usize],
+        _output_data: &mut [f32],
     ) -> Result<Vec<usize>> {
         unimplemented!()
     }

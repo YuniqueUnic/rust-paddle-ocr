@@ -4,10 +4,10 @@
 
 PaddleOCR 모델과 MNN 추론 런타임을 사용하는 경량 Rust OCR 라이브러리입니다. 텍스트 검출, 텍스트 인식, 엔드투엔드 OCR, 파일 또는 메모리 바이트에서의 모델 로딩을 지원합니다.
 
-관련 도구:
-- CLI: [newbee_ocr_cli](../../newbee_ocr_cli)
-- HTTP 서비스: [newbee_ocr_service](../../newbee_ocr_service)
-- C API 바인딩: [paddle-ocr-capi](../../paddle-ocr-capi)
+관련 프로젝트:
+- CLI: [newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API 바인딩: [paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP 서비스: `newbee_ocr_service`는 로컬 전용이며 공개 저장소로 게시하지 않았습니다.
 
 ## 지원 모델
 
@@ -85,19 +85,50 @@ cargo build --release
 cargo test
 ```
 
-사용 가능한 경우 사전 빌드된 MNN 라이브러리가 자동으로 사용됩니다. MNN 을 소스에서 빌드하려면:
+## 성능 확인
+
+로컬에서 Criterion 벤치마크를 실행합니다.
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+CI 방식의 짧은 성능 smoke 테스트를 실행합니다.
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions 는 release 모드 테스트를 직렬로 실행하고 `PERF_METRIC` 로그를 artifact 로 저장합니다. 회귀 검사는 동일한 runner 에서 direct exact-width 파이프라인과 기존 crop 파이프라인을 비교하며, 중앙값 비율이 `OCR_RS_PERF_REGRESSION_LIMIT`(기본값 `1.15`)을 초과하면 실패하므로 불안정한 절대 지연 시간에 의존하지 않습니다.
+
+호환되는 경우 CPU 또는 Apple Metal 사전 빌드 MNN 이 자동으로 사용됩니다. 사전 빌드 패키지에 없는 GPU feature 를 활성화하면 MNN 을 소스에서 자동으로 빌드합니다.
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU 백엔드는 `OcrEngineConfig` 로 선택합니다.
+빌드하기 전에 선택한 백엔드의 SDK 와 개발 라이브러리를 설치해야 합니다. GPU 백엔드는 `OcrEngineConfig` 로 선택합니다.
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+링크된 MNN 에 요청한 백엔드가 등록되어 있지 않으면 CPU 로 조용히 폴백하지 않고 엔진 생성 시 `MnnError::BackendUnavailable` 을 반환합니다.
+
+`x86_64-pc-windows-gnu` 는 MNN 을 소스에서 빌드하므로 MinGW C/C++ 툴체인이 필요합니다. 기본적으로 애플리케이션과 함께 일치하는 MinGW 런타임 DLL을 배포해야 합니다. `static-cpp-runtime` 을 활성화하면 libstdc++, libgcc 및 winpthreads를 정적으로 링크하여 생성된 바이너리의 MinGW 런타임 DLL 의존성을 제거할 수 있습니다.
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA Windows CUDA 툴체인은 MSVC 를 요구합니다. CUDA 소스 빌드에는 `x86_64-pc-windows-msvc` 를 사용하거나 `mnn-dynamic`/`mnn-static` 으로 호환 MNN 라이브러리를 제공하세요.
+
+이 feature는 `ocr-rs` 자체가 링크하는 런타임만 제어합니다. `mnn-dynamic` 으로 제공한 DLL에는 자체 MinGW 런타임 의존성이 남아 있을 수 있습니다.
 
 ## License
 

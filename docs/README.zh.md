@@ -4,10 +4,10 @@
 
 一个基于 PaddleOCR 模型和 MNN 推理运行时的轻量级 Rust OCR 库。支持文本检测、文本识别、端到端 OCR，以及从文件或内存字节加载模型。
 
-相关工具：
-- CLI：[newbee_ocr_cli](../../newbee_ocr_cli)
-- HTTP 服务：[newbee_ocr_service](../../newbee_ocr_service)
-- C API 绑定：[paddle-ocr-capi](../../paddle-ocr-capi)
+相关项目：
+- CLI：[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API 绑定：[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP 服务：`newbee_ocr_service` 仅在本地仓库中，未发布为公开项目。
 
 ## 支持的模型
 
@@ -78,6 +78,23 @@ let rec = ocr_rs::OcrEngine::rec_only(
 )?;
 ```
 
+### 横向与竖向文字混排
+
+原有 `recognize` 方法保持单次检测的既有行为。图片中同时包含横向文字和旋转
+90°/270° 的文字时，可以只为本次调用显式启用 Robust 模式：
+
+```rust
+use ocr_rs::{RecognizeOptions, RotatedTextMode};
+
+let options = RecognizeOptions::new()
+    .with_rotated_text_mode(RotatedTextMode::Robust);
+let results = engine.recognize_with_options(&image, &options)?;
+```
+
+Robust 模式会额外检测旋转 90° 和 270° 的图像，将找回的文本框映射到输入图坐标，
+并且只识别竖向候选框。原有 `recognize` 调用不会增加任何推理开销。如果普通检测
+已经能找到竖向框，可以使用开销更低的 `RotatedTextMode::DetectedOnly`。
+
 ## 构建
 
 ```bash
@@ -85,19 +102,50 @@ cargo build --release
 cargo test
 ```
 
-默认会自动使用可用的预构建 MNN 库。如需自定义构建 MNN：
+## 性能检查
+
+本地运行 Criterion 基准：
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+运行 CI 风格的性能 smoke 测试：
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions 会串行运行 release 模式测试，并将 `PERF_METRIC` 日志保存为 artifact。回归门禁会在同一 runner 上比较直通 exact-width 流水线与旧 crop 流水线；中位数比值超过 `OCR_RS_PERF_REGRESSION_LIMIT`（默认 `1.15`）时失败，因此不依赖不稳定的绝对耗时。
+
+兼容时会自动使用 CPU 预构建包或 Apple Metal 预构建包。启用预构建包未包含的 GPU feature 时，会自动从源码构建 MNN：
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU 后端通过 `OcrEngineConfig` 选择：
+构建前需要安装对应后端的 SDK 和开发库。GPU 后端通过 `OcrEngineConfig` 选择：
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+如果链接的 MNN 没有注册所请求的后端，创建引擎会返回 `MnnError::BackendUnavailable`，不再静默回退到 CPU。
+
+`x86_64-pc-windows-gnu` 会从源码构建 MNN，需要 MinGW C/C++ 工具链。默认情况下，应用需要携带匹配的 MinGW 运行时 DLL。启用 `static-cpp-runtime` 可静态链接 libstdc++、libgcc 和 winpthreads，使生成的二进制文件不再依赖 MinGW 运行时 DLL：
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA 的 Windows CUDA 工具链要求 MSVC；源码构建 CUDA 请使用 `x86_64-pc-windows-msvc`，或通过 `mnn-dynamic`/`mnn-static` 提供兼容的 MNN 库。
+
+该 feature 只控制 `ocr-rs` 自身链接的运行时；通过 `mnn-dynamic` 提供的第三方 DLL 仍可能带有自己的 MinGW 运行时依赖。
 
 ## License
 

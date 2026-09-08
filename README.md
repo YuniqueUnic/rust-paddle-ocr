@@ -4,10 +4,10 @@
 
 A lightweight Rust OCR library based on PaddleOCR models and the MNN inference runtime. It provides text detection, text recognition, and end-to-end OCR with file or in-memory model loading.
 
-Related tools:
-- CLI: [newbee_ocr_cli](../newbee_ocr_cli)
-- HTTP service: [newbee_ocr_service](../newbee_ocr_service)
-- C API bindings: [paddle-ocr-capi](../paddle-ocr-capi)
+Related projects:
+- CLI: [newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API bindings: [paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP service: `newbee_ocr_service` is local-only and is not published as a public repository.
 
 ## Supported Models
 
@@ -78,6 +78,25 @@ let rec = ocr_rs::OcrEngine::rec_only(
 )?;
 ```
 
+### Mixed horizontal and vertical text
+
+The existing `recognize` method keeps the original single-pass behavior. For
+images that mix horizontal text with text rotated by 90 or 270 degrees, enable
+the opt-in robust mode for that call:
+
+```rust
+use ocr_rs::{RecognizeOptions, RotatedTextMode};
+
+let options = RecognizeOptions::new()
+    .with_rotated_text_mode(RotatedTextMode::Robust);
+let results = engine.recognize_with_options(&image, &options)?;
+```
+
+Robust mode runs detection on 90° and 270° copies, maps recovered boxes back to
+the input coordinates, and recognizes only vertical candidates. This adds no
+work to existing `recognize` calls. `RotatedTextMode::DetectedOnly` is a lighter
+option when the normal detector already finds the vertical boxes.
+
 ## Build
 
 ```bash
@@ -85,19 +104,50 @@ cargo build --release
 cargo test
 ```
 
-Prebuilt MNN libraries are used automatically when available. For custom MNN builds:
+## Performance Checks
+
+Run Criterion benchmarks locally:
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+Run the CI-style performance smoke test:
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions runs these release tests serially and stores the `PERF_METRIC` log as an artifact. The regression guard compares the direct exact-width pipeline with the legacy crop pipeline on the same runner and fails when the median ratio exceeds `OCR_RS_PERF_REGRESSION_LIMIT` (default `1.15`), avoiding unstable absolute latency limits.
+
+CPU prebuilts and Apple Metal prebuilts are used automatically when compatible. Enabling a GPU feature that is not present in the prebuilt package automatically builds MNN from source:
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU backends are selected through `OcrEngineConfig`:
+Install the SDK and development libraries required by the selected backend before building. GPU backends are selected through `OcrEngineConfig`:
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+Engine creation returns `MnnError::BackendUnavailable` when the requested backend was not registered instead of silently falling back to CPU.
+
+`x86_64-pc-windows-gnu` builds MNN from source and requires a MinGW C/C++ toolchain. By default, applications must distribute the matching MinGW runtime DLLs. Enable `static-cpp-runtime` to statically link libstdc++, libgcc, and winpthreads so the resulting binary does not depend on MinGW runtime DLLs:
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA's Windows CUDA toolchain requires MSVC; use `x86_64-pc-windows-msvc` for source-built CUDA, or provide a compatible MNN library with `mnn-dynamic`/`mnn-static`.
+
+This feature controls the runtime linked by `ocr-rs`; a user-supplied DLL selected with `mnn-dynamic` may still have its own MinGW runtime dependencies.
 
 ## License
 

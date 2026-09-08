@@ -10,6 +10,13 @@
 #include <queue>
 #include <string>
 #include <memory>
+#include <limits>
+
+namespace MNN
+{
+    class RuntimeCreator;
+    MNN_PUBLIC const RuntimeCreator *MNNGetExtraRuntimeCreator(MNNForwardType type);
+}
 
 // C++11 compatible make_unique
 template <typename T, typename... Args>
@@ -147,6 +154,15 @@ static bool init_engine_tensors(MNN_InferenceEngine *engine)
 const char *mnnr_get_version(void)
 {
     return MNN_VERSION;
+}
+
+bool mnnr_is_backend_available(int32_t forward_type)
+{
+    if (forward_type < MNN_FORWARD_CPU || forward_type >= MNN_FORWARD_ALL)
+    {
+        return false;
+    }
+    return MNN::MNNGetExtraRuntimeCreator(static_cast<MNNForwardType>(forward_type)) != nullptr;
 }
 
 // ============== Shared Runtime API ==============
@@ -648,12 +664,12 @@ MNNR_ErrorCode mnnr_run_inference_dynamic(
     const float *input_data,
     const size_t *input_dims,
     size_t input_ndims,
-    MNNR_OutputSink sink,
-    void *sink_ctx,
+    float **output_data,
+    size_t *output_size,
     size_t *output_dims,
     size_t *output_ndims)
 {
-    if (!engine || !input_data || !input_dims || !sink || !output_dims || !output_ndims)
+    if (!engine || !input_data || !input_dims || !output_data || !output_size || !output_dims || !output_ndims)
     {
         return MNNR_ERROR_INVALID_PARAMETER;
     }
@@ -663,9 +679,11 @@ MNNR_ErrorCode mnnr_run_inference_dynamic(
 
     // Build new input shape
     std::vector<int> new_shape(input_ndims);
+    size_t total_input_size = 1;
     for (size_t i = 0; i < input_ndims; i++)
     {
         new_shape[i] = static_cast<int>(input_dims[i]);
+        total_input_size *= input_dims[i];
     }
 
     // Resize input tensor
@@ -681,16 +699,9 @@ MNNR_ErrorCode mnnr_run_inference_dynamic(
     }
     engine->input_tensor = input_map.begin()->second;
 
-    // Wrap the caller's input in a host tensor rather than allocating and memcpy'ing into
-    // one; `Tensor::create` with non-null data borrows the pointer and never frees it.
-    // `copyFromHostTensor` only reads, so casting away const is sound here.
-    std::unique_ptr<MNN::Tensor> input_host(MNN::Tensor::create<float>(
-        new_shape, const_cast<float *>(input_data), MNN::Tensor::CAFFE));
-    if (!input_host)
-    {
-        engine->last_error = "Failed to wrap input buffer in a host tensor";
-        return MNNR_ERROR_RUNTIME_ERROR;
-    }
+    // Create host tensor and copy input data
+    auto input_host = make_unique_ptr<MNN::Tensor>(engine->input_tensor, MNN::Tensor::CAFFE);
+    std::memcpy(input_host->host<float>(), input_data, total_input_size * sizeof(float));
     engine->input_tensor->copyFromHostTensor(input_host.get());
 
     // Run inference
@@ -712,36 +723,38 @@ MNNR_ErrorCode mnnr_run_inference_dynamic(
 
     // Get output shape
     auto output_shape = engine->output_tensor->shape();
-    if (output_shape.size() > MNNR_MAX_DIMS)
+    if (output_shape.empty() || output_shape.size() > 8)
     {
-        engine->last_error = "Output rank exceeds MNNR_MAX_DIMS";
+        engine->last_error = "Dynamic output rank must be between 1 and 8";
         return MNNR_ERROR_UNSUPPORTED;
     }
     *output_ndims = output_shape.size();
     size_t total_output_size = 1;
     for (size_t i = 0; i < output_shape.size(); i++)
     {
+        if (output_shape[i] <= 0 || total_output_size >
+            std::numeric_limits<size_t>::max() / sizeof(float) / static_cast<size_t>(output_shape[i]))
+        {
+            engine->last_error = "Invalid dynamic output dimensions";
+            return MNNR_ERROR_UNSUPPORTED;
+        }
         output_dims[i] = static_cast<size_t>(output_shape[i]);
         total_output_size *= output_shape[i];
     }
+    *output_size = total_output_size;
 
-    float *dst = sink(sink_ctx, total_output_size);
-    if (!dst)
-    {
-        engine->last_error = "Output sink did not provide a buffer";
-        return MNNR_ERROR_OUT_OF_MEMORY;
-    }
+    // Allocate output buffer
+    *output_data = new float[total_output_size];
 
-    // Wrap the caller's buffer so MNN's format conversion writes the result straight
-    // into it, instead of into a host tensor we would then have to memcpy out of.
-    std::unique_ptr<MNN::Tensor> output_host(
-        MNN::Tensor::create<float>(output_shape, dst, MNN::Tensor::CAFFE));
-    if (!output_host)
-    {
-        engine->last_error = "Failed to wrap output buffer in a host tensor";
-        return MNNR_ERROR_RUNTIME_ERROR;
-    }
+    // Copy output data
+    auto output_host = make_unique_ptr<MNN::Tensor>(engine->output_tensor, MNN::Tensor::CAFFE);
     engine->output_tensor->copyToHostTensor(output_host.get());
+    std::memcpy(*output_data, output_host->host<float>(), total_output_size * sizeof(float));
 
     return MNNR_SUCCESS;
+}
+
+void mnnr_free_output(float *output_data)
+{
+    delete[] output_data;
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ocr-rs"
-version = "2.3.0"
+version = "2.4.1"
 edition = "2021"
 authors = ["ChenZibo <qw.54@163.com>"]
 readme = "README.md"
@@ -45,6 +45,9 @@ mnn-dynamic = []
 # 使用预编译的 MNN 静态库，需设置 MNN_LIB_DIR 和 MNN_INCLUDE_DIR 环境变量
 mnn-static = []
 
+# 在 Windows GNU 上静态链接 MinGW C++/GCC/pthread 运行时，避免分发 MinGW DLL
+static-cpp-runtime = []
+
 # 可选特性
 async = ["tokio", "futures"]
 
@@ -55,9 +58,6 @@ docsrs = []
 features = ["docsrs"]
 default-features = false
 targets = ["x86_64-unknown-linux-gnu"]
-
-[lib]
-crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
 cmake = "0.1"
@@ -81,6 +81,10 @@ futures = { version = "0.3", optional = true }
 [dev-dependencies]
 criterion = "0.5"
 
+
+[[bench]]
+name = "bench_metrics"
+harness = false
 
 [[example]]
 name = "advanced"

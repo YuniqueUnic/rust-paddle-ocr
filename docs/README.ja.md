@@ -4,10 +4,10 @@
 
 PaddleOCR モデルと MNN 推論ランタイムを利用する軽量な Rust OCR ライブラリです。テキスト検出、テキスト認識、エンドツーエンド OCR、ファイルまたはメモリバイトからのモデル読み込みをサポートします。
 
-関連ツール：
-- CLI：[newbee_ocr_cli](../../newbee_ocr_cli)
-- HTTP サービス：[newbee_ocr_service](../../newbee_ocr_service)
-- C API バインディング：[paddle-ocr-capi](../../paddle-ocr-capi)
+関連プロジェクト：
+- CLI：[newbee-ocr-cli](https://github.com/zibo-chen/newbee-ocr-cli)
+- C API バインディング：[paddle-ocr-capi](https://github.com/zibo-chen/paddle-ocr-capi)
+- HTTP サービス：`newbee_ocr_service` はローカル専用で、公開リポジトリとしては公開していません。
 
 ## 対応モデル
 
@@ -85,19 +85,50 @@ cargo build --release
 cargo test
 ```
 
-利用可能な場合は事前ビルド済み MNN ライブラリが自動的に使われます。MNN をソースからビルドする場合：
+## パフォーマンス確認
+
+ローカルで Criterion ベンチマークを実行します。
+
+```bash
+cargo bench --bench bench_metrics
+```
+
+CI と同じ短いパフォーマンス smoke テストを実行します。
+
+```bash
+OCR_RS_PERF_TESTS=1 cargo test --release --test performance_tests -- --nocapture --test-threads=1
+```
+
+GitHub Actions は release モードのテストを直列実行し、`PERF_METRIC` ログを artifact として保存します。回帰ガードは同じ runner 上で direct exact-width パイプラインと従来の crop パイプラインを比較し、中央値の比率が `OCR_RS_PERF_REGRESSION_LIMIT`（既定値 `1.15`）を超えた場合に失敗するため、不安定な絶対時間には依存しません。
+
+互換性がある場合は CPU または Apple Metal の事前ビルド済み MNN が自動的に使われます。事前ビルドに含まれない GPU feature を有効にすると、MNN は自動的にソースからビルドされます。
 
 ```bash
 cargo build --features build-mnn-from-source
+cargo build --release --features cuda
+cargo build --release --features vulkan
 ```
 
-GPU バックエンドは `OcrEngineConfig` で指定します。
+ビルド前に対象バックエンドの SDK と開発ライブラリをインストールしてください。GPU バックエンドは `OcrEngineConfig` で指定します。
 
 ```rust
 use ocr_rs::{Backend, OcrEngineConfig};
 
 let config = OcrEngineConfig::new().with_backend(Backend::Metal);
+assert!(Backend::Metal.is_available());
 ```
+
+リンクされた MNN に要求したバックエンドが登録されていない場合、CPU に暗黙でフォールバックせず、エンジン作成時に `MnnError::BackendUnavailable` を返します。
+
+`x86_64-pc-windows-gnu` は MNN をソースからビルドするため、MinGW C/C++ ツールチェーンが必要です。デフォルトでは対応する MinGW ランタイム DLL の配布が必要です。`static-cpp-runtime` を有効にすると libstdc++、libgcc、winpthreads が静的リンクされ、生成されたバイナリは MinGW ランタイム DLL に依存しません。
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu --features static-cpp-runtime
+```
+
+NVIDIA の Windows CUDA ツールチェーンには MSVC が必要です。CUDA のソースビルドには `x86_64-pc-windows-msvc` を使うか、`mnn-dynamic`/`mnn-static` で互換 MNN を指定してください。
+
+この feature が制御するのは `ocr-rs` 自身がリンクするランタイムです。`mnn-dynamic` で指定した DLL には、独自の MinGW ランタイム依存関係が残る場合があります。
 
 ## License
 

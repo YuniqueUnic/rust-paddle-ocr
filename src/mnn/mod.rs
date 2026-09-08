@@ -14,7 +14,7 @@ pub use docsrs_stub::*;
 mod normal_impl {
 
     use ndarray::{ArrayD, ArrayViewD, IxDyn};
-    use std::ffi::{c_void, CStr};
+    use std::ffi::CStr;
     use std::ptr::NonNull;
 
     #[allow(non_camel_case_types)]
@@ -40,6 +40,8 @@ mod normal_impl {
         Unsupported,
         /// Model loading failed
         ModelLoadFailed(String),
+        /// Requested inference backend is not available in the linked MNN build
+        BackendUnavailable(String),
         /// Null pointer error
         NullPointer,
         /// Shape mismatch
@@ -57,6 +59,9 @@ mod normal_impl {
                 MnnError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
                 MnnError::Unsupported => write!(f, "Unsupported operation"),
                 MnnError::ModelLoadFailed(msg) => write!(f, "Model loading failed: {}", msg),
+                MnnError::BackendUnavailable(backend) => {
+                    write!(f, "Backend unavailable: {}", backend)
+                }
                 MnnError::NullPointer => write!(f, "Null pointer"),
                 MnnError::ShapeMismatch { expected, got } => {
                     write!(f, "Shape mismatch: expected {:?}, got {:?}", expected, got)
@@ -118,6 +123,32 @@ mod normal_impl {
     }
 
     impl Backend {
+        /// Stable backend name used in errors, logs, and command-line options.
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Backend::CPU => "cpu",
+                Backend::Metal => "metal",
+                Backend::OpenCL => "opencl",
+                Backend::OpenGL => "opengl",
+                Backend::Vulkan => "vulkan",
+                Backend::CUDA => "cuda",
+                Backend::CoreML => "coreml",
+            }
+        }
+
+        /// Return whether the linked MNN library registered this backend.
+        pub fn is_available(self) -> bool {
+            unsafe { ffi::mnnr_is_backend_available(self.to_forward_type()) }
+        }
+
+        fn ensure_available(self) -> Result<()> {
+            if self.is_available() {
+                Ok(())
+            } else {
+                Err(MnnError::BackendUnavailable(self.as_str().to_string()))
+            }
+        }
+
         /// Convert to MNNForwardType integer value
         fn to_forward_type(self) -> i32 {
             match self {
@@ -210,6 +241,7 @@ mod normal_impl {
     impl SharedRuntime {
         /// Create new shared runtime
         pub fn new(config: &InferenceConfig) -> Result<Self> {
+            config.backend.ensure_available()?;
             let c_config = config.to_ffi();
             let runtime_ptr = unsafe { ffi::mnnr_create_runtime(&c_config) };
 
@@ -237,27 +269,6 @@ mod normal_impl {
     unsafe impl Sync for SharedRuntime {}
 
     // ============== Helper Functions ==============
-
-    /// Lends a caller-owned `Vec` to the C++ wrapper as the inference output buffer.
-    ///
-    /// Only capacity is reserved from the callback; the length is set after the FFI call
-    /// reports success, so the `Vec` is never observable holding uninitialized elements.
-    struct OutputSink<'a> {
-        out: &'a mut Vec<f32>,
-        len: usize,
-    }
-
-    unsafe extern "C" fn reserve_output(ctx: *mut c_void, n_floats: usize) -> *mut f32 {
-        let sink = &mut *(ctx as *mut OutputSink<'_>);
-        sink.out.clear();
-        // Returning null tells the wrapper to fail with OUT_OF_MEMORY, which is the only
-        // way to report failure without unwinding across the FFI boundary.
-        if sink.out.try_reserve_exact(n_floats).is_err() {
-            return std::ptr::null_mut();
-        }
-        sink.len = n_floats;
-        sink.out.as_mut_ptr()
-    }
 
     fn get_last_error_message(engine: Option<*const ffi::MNN_InferenceEngine>) -> String {
         match engine {
@@ -304,6 +315,7 @@ mod normal_impl {
             }
 
             let cfg = config.unwrap_or_default();
+            cfg.backend.ensure_available()?;
             let c_config = cfg.to_ffi();
 
             let engine_ptr = unsafe {
@@ -510,37 +522,63 @@ mod normal_impl {
                 || self.output_shape.iter().any(|&d| d > 100000)
         }
 
-        /// Execute dynamic shape inference, writing the NCHW result into `out`.
+        /// Execute dynamic shape inference
         ///
-        /// Suitable for models where input shape changes at runtime (such as the detection
-        /// and recognition models, whose input width follows the image). MNN converts its
-        /// result directly into `out`, so this is the only copy of the output that exists.
-        /// Reusing one buffer across calls also reuses its allocation.
+        /// Suitable for models where input shape changes at runtime (such as detection models).
+        /// This function adjusts model input tensor shape before running.
+        ///
+        /// # Parameters
+        /// - `input_data`: Input data array
         ///
         /// # Returns
-        /// The output shape, dynamically determined by the model.
-        pub fn run_dynamic_into(
-            &self,
-            input_data: ArrayViewD<f32>,
-            out: &mut Vec<f32>,
-        ) -> Result<Vec<usize>> {
-            let input_shape: Vec<usize> = input_data.shape().to_vec();
+        /// Inference result array, shape dynamically determined by model
+        pub fn run_dynamic(&self, input_data: ArrayViewD<f32>) -> Result<ArrayD<f32>> {
             let input_slice = input_data.as_slice().ok_or_else(|| {
                 MnnError::InvalidParameter("Input data must be contiguous".to_string())
             })?;
+            let (output_buffer, output_shape) =
+                self.run_dynamic_raw(input_slice, input_data.shape())?;
 
-            let mut sink = OutputSink { out, len: 0 };
-            let mut output_dims = [0usize; ffi::MNNR_MAX_DIMS as usize];
+            ArrayD::from_shape_vec(IxDyn(&output_shape), output_buffer).map_err(|e| {
+                MnnError::RuntimeError(format!("Failed to create output array: {}", e))
+            })
+        }
+
+        /// Execute dynamic shape inference (using raw slices)
+        ///
+        /// Low-level API, caller is responsible for managing output buffer
+        pub fn run_dynamic_raw(
+            &self,
+            input: &[f32],
+            input_shape: &[usize],
+        ) -> Result<(Vec<f32>, Vec<usize>)> {
+            // The C ABI receives a pointer without its slice length. Validate before
+            // it can copy the shape's element count out of the Rust allocation.
+            let elements = input_shape.iter().try_fold(1usize, |count, &dim| {
+                if dim == 0 || dim > i32::MAX as usize {
+                    None
+                } else {
+                    count.checked_mul(dim)
+                }
+            });
+            if input_shape.is_empty() || input_shape.len() > 8 || elements != Some(input.len()) {
+                return Err(MnnError::InvalidParameter(
+                    "Input shape must have 1..=8 positive dimensions matching the buffer".into(),
+                ));
+            }
+            let mut output_data: *mut f32 = std::ptr::null_mut();
+            let mut output_size: usize = 0;
+            let mut output_dims = [0usize; 8];
             let mut output_ndims: usize = 0;
 
             let error_code = unsafe {
                 ffi::mnnr_run_inference_dynamic(
                     self.ptr.as_ptr(),
-                    input_slice.as_ptr(),
+                    input.as_ptr(),
                     input_shape.as_ptr(),
                     input_shape.len(),
-                    Some(reserve_output),
-                    &mut sink as *mut _ as *mut c_void,
+                    &mut output_data,
+                    &mut output_size,
                     output_dims.as_mut_ptr(),
                     &mut output_ndims,
                 )
@@ -559,30 +597,23 @@ mod normal_impl {
                 };
             }
 
-            if output_ndims > output_dims.len() {
-                return Err(MnnError::RuntimeError(format!(
-                    "Output rank {output_ndims} exceeds {}",
-                    output_dims.len()
-                )));
+            if output_ndims > output_dims.len() || output_size == 0 || output_data.is_null() {
+                unsafe { ffi::mnnr_free_output(output_data) };
+                return Err(MnnError::RuntimeError(
+                    "Invalid dynamic output buffer".into(),
+                ));
             }
 
-            // SAFETY: the wrapper reported success, so it wrote `sink.len` floats into the
-            // capacity `reserve_output` handed it.
-            unsafe { sink.out.set_len(sink.len) };
+            // Copy output and free C buffer
+            let output_shape = output_dims[..output_ndims].to_vec();
+            let output_buffer = unsafe {
+                let slice = std::slice::from_raw_parts(output_data, output_size);
+                let buffer = slice.to_vec();
+                ffi::mnnr_free_output(output_data);
+                buffer
+            };
 
-            Ok(output_dims[..output_ndims].to_vec())
-        }
-
-        /// Execute dynamic shape inference, allocating the output array.
-        ///
-        /// Prefer [`Self::run_dynamic_into`] when the output only needs to be read once;
-        /// this wrapper exists for callers that want an owned [`ArrayD`].
-        pub fn run_dynamic(&self, input_data: ArrayViewD<f32>) -> Result<ArrayD<f32>> {
-            let mut out = Vec::new();
-            let shape = self.run_dynamic_into(input_data, &mut out)?;
-            ArrayD::from_shape_vec(IxDyn(&shape), out).map_err(|e| {
-                MnnError::RuntimeError(format!("Failed to create output array: {}", e))
-            })
+            Ok((output_buffer, output_shape))
         }
     }
 
@@ -625,6 +656,7 @@ mod normal_impl {
             }
 
             let cfg = config.unwrap_or_default();
+            cfg.backend.ensure_available()?;
             let c_config = cfg.to_ffi();
 
             let pool_ptr = unsafe {
@@ -731,6 +763,54 @@ mod normal_impl {
             assert_eq!(config.thread_count, 8);
             assert_eq!(config.precision_mode, PrecisionMode::High);
             assert_eq!(config.backend, Backend::Metal);
+        }
+
+        #[test]
+        fn cpu_backend_is_always_available() {
+            assert!(Backend::CPU.is_available());
+        }
+
+        #[test]
+        fn backend_unavailable_error_names_the_requested_backend() {
+            let backend = [
+                Backend::CUDA,
+                Backend::Vulkan,
+                Backend::OpenCL,
+                Backend::OpenGL,
+                Backend::CoreML,
+                Backend::Metal,
+            ]
+            .into_iter()
+            .find(|backend| !backend.is_available())
+            .expect("at least one optional backend should be unavailable in a platform build");
+
+            let error = backend.ensure_available().unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("Backend unavailable: {}", backend.as_str())
+            );
+        }
+
+        #[test]
+        fn engine_rejects_an_unavailable_backend_before_loading_the_model() {
+            let backend = [
+                Backend::CUDA,
+                Backend::Vulkan,
+                Backend::OpenCL,
+                Backend::OpenGL,
+                Backend::CoreML,
+                Backend::Metal,
+            ]
+            .into_iter()
+            .find(|backend| !backend.is_available())
+            .expect("at least one optional backend should be unavailable in a platform build");
+            let config = InferenceConfig::new().with_backend(backend);
+
+            let result = InferenceEngine::from_buffer(&[0], Some(config));
+            assert!(matches!(
+                result,
+                Err(MnnError::BackendUnavailable(name)) if name == backend.as_str()
+            ));
         }
     }
 } // end of normal_impl module
